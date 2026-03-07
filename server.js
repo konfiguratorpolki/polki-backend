@@ -50,11 +50,11 @@ try {
         host: 'smtp.gmail.com',
         port: 587, secure: false,
         auth: { 
-            user: process.env.SMTP_USER || 'nowywymiar2@gmail.com', 
-            pass: process.env.SMTP_PASS || 'evmadrvfacphzzat'
+            user: process.env.SMTP_USER, 
+            pass: process.env.SMTP_PASS
         }
     });
-    console.log('📧 Mailer zainicjalizowany:', process.env.SMTP_USER || 'nowywymiar2@gmail.com');
+    console.log('📧 Mailer zainicjalizowany:', process.env.SMTP_USER);
 } catch(e) { console.log('❌ Błąd mailera:', e.message); }
 
 function p24Sign(data) {
