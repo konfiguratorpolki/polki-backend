@@ -1,4 +1,4 @@
-
+require('dotenv').config();
 const express = require('express');
 const crypto  = require('crypto');
 const fs      = require('fs');
@@ -45,19 +45,16 @@ const ADMIN_PASS   = process.env.ADMIN_PASSWORD || 'polki2024';
 // Email
 let mailer = null;
 try {
-    console.log('📧 SMTP_USER:', process.env.SMTP_USER || 'BRAK');
-    console.log('📧 SMTP_PASS:', process.env.SMTP_PASS ? `ustawione (${process.env.SMTP_PASS.length} znaków)` : 'BRAK');
-    if (process.env.SMTP_USER && process.env.SMTP_PASS) {
-        const nodemailer = require('nodemailer');
-        mailer = nodemailer.createTransport({
-            host: process.env.SMTP_HOST || 'smtp.gmail.com',
-            port: 587, secure: false,
-            auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
-        });
-        console.log('📧 Mailer zainicjalizowany pomyślnie');
-    } else {
-        console.log('⚠️  Mailer NIE zainicjalizowany - brak SMTP_USER lub SMTP_PASS');
-    }
+    const nodemailer = require('nodemailer');
+    mailer = nodemailer.createTransport({
+        host: 'smtp.gmail.com',
+        port: 587, secure: false,
+        auth: { 
+            user: process.env.SMTP_USER || 'nowywymiar2@gmail.com', 
+            pass: process.env.SMTP_PASS || 'evmadrvfacphzzat'
+        }
+    });
+    console.log('📧 Mailer zainicjalizowany:', process.env.SMTP_USER || 'nowywymiar2@gmail.com');
 } catch(e) { console.log('❌ Błąd mailera:', e.message); }
 
 function p24Sign(data) {
@@ -271,6 +268,6 @@ async function sendCustomerEmail(order) {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`✅ Backend port ${PORT} | Tryb: ${TEST_MODE ? 'TESTOWY v2' : 'PRODUKCJA'}`);
+    console.log(`✅ Backend port ${PORT} | Tryb: ${TEST_MODE ? 'TESTOWY' : 'PRODUKCJA'}`);
     console.log(`📋 Panel zamówień: /zamowienia?pass=${ADMIN_PASS}`);
 });
