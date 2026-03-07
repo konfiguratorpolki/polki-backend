@@ -228,26 +228,54 @@ async function sendEmails(order, p24Id='TEST') {
     if (!RESEND_KEY) { console.log('⚠️ Brak RESEND_API_KEY — email pominięty'); return; }
     const cart  = JSON.parse(order.cart_json || '[]');
     const total = ((order.total_amount||0)/100).toFixed(2);
-    const items = cart.map((i,n)=>`${n+1}. ${i.name} x${i.quantity} | ${(i.price*i.quantity).toFixed(2)} zł`).join('\n');
+
+    // Buduj HTML i załączniki
+    const attachments = [];
+    const itemsHtml = cart.map((i,n) => {
+        let imgHtml = '';
+        if (i.snapshot && i.snapshot.startsWith('data:image/png;base64,')) {
+            const b64 = i.snapshot.replace('data:image/png;base64,', '');
+            const filename = `polka-${n+1}.png`;
+            attachments.push({ filename, content: b64 });
+            imgHtml = `<img src="cid:${filename}" style="width:120px;height:120px;object-fit:contain;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;" />`;
+        }
+        return `<tr>
+            <td style="padding:12px;vertical-align:middle">${imgHtml}</td>
+            <td style="padding:12px;vertical-align:middle">
+                <b>${i.name}</b> x${i.quantity}<br>
+                <small style="color:#6b7280">${i.summary || ''}</small><br>
+                <small style="color:#6b7280">Boki: ${i.sideColor || '-'} | Półki: ${i.shelfColor || '-'}</small>
+            </td>
+            <td style="padding:12px;vertical-align:middle;text-align:right"><b>${(i.price*i.quantity).toFixed(2)} zł</b></td>
+        </tr>`;
+    }).join('');
 
     // Email do właściciela
     try {
+        const emailPayload = {
+            from: 'Konfigurator Półek <onboarding@resend.dev>',
+            to: [MAIL_TO || order.customer_email],
+            subject: `🛒 Nowe zamówienie #${order.order_uuid.slice(0,8)} — ${total} zł`,
+            html: `<div style="font-family:sans-serif;max-width:600px">
+                   <h2 style="color:#16a34a">🛒 Nowe zamówienie!</h2>
+                   <p><b>Klient:</b> ${order.customer_name}<br>
+                   <b>Email:</b> ${order.customer_email}<br>
+                   <b>Telefon:</b> ${order.customer_phone}<br>
+                   <b>Adres:</b> ${order.customer_address}<br>
+                   <b>Uwagi:</b> ${order.customer_notes||'-'}</p>
+                   <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px">
+                   ${itemsHtml}
+                   <tr style="background:#f9fafb">
+                       <td colspan="2" style="padding:12px;text-align:right"><b>Łącznie:</b></td>
+                       <td style="padding:12px;text-align:right"><b style="color:#16a34a;font-size:18px">${total} zł</b></td>
+                   </tr>
+                   </table></div>`,
+        };
+        if (attachments.length > 0) emailPayload.attachments = attachments;
         const r = await fetch('https://api.resend.com/emails', {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                from: 'Konfigurator Półek <onboarding@resend.dev>',
-                to: [MAIL_TO || order.customer_email],
-                subject: `🛒 Nowe zamówienie #${order.order_uuid.slice(0,8)} — ${total} zł`,
-                html: `<h2>🛒 Nowe zamówienie!</h2>
-                       <p><b>Klient:</b> ${order.customer_name}<br>
-                       <b>Email:</b> ${order.customer_email}<br>
-                       <b>Telefon:</b> ${order.customer_phone}<br>
-                       <b>Adres:</b> ${order.customer_address}<br>
-                       <b>Uwagi:</b> ${order.customer_notes||'-'}</p>
-                       <pre style="background:#f5f5f5;padding:12px">${items}</pre>
-                       <p><b>Łącznie: ${total} zł</b></p>`
-            })
+            body: JSON.stringify(emailPayload)
         });
         const data = await r.json();
         if (r.ok) console.log('📧 Email do właściciela wysłany:', data.id);
