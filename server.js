@@ -45,6 +45,8 @@ const ADMIN_PASS   = process.env.ADMIN_PASSWORD || 'polki2024';
 // Email
 let mailer = null;
 try {
+    console.log('📧 SMTP_USER:', process.env.SMTP_USER || 'BRAK');
+    console.log('📧 SMTP_PASS:', process.env.SMTP_PASS ? `ustawione (${process.env.SMTP_PASS.length} znaków)` : 'BRAK');
     if (process.env.SMTP_USER && process.env.SMTP_PASS) {
         const nodemailer = require('nodemailer');
         mailer = nodemailer.createTransport({
@@ -52,8 +54,11 @@ try {
             port: 587, secure: false,
             auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
         });
+        console.log('📧 Mailer zainicjalizowany pomyślnie');
+    } else {
+        console.log('⚠️  Mailer NIE zainicjalizowany - brak SMTP_USER lub SMTP_PASS');
     }
-} catch(e) {}
+} catch(e) { console.log('❌ Błąd mailera:', e.message); }
 
 function p24Sign(data) {
     return crypto.createHash('sha384').update(JSON.stringify(data)).digest('hex');
