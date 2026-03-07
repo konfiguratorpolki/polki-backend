@@ -237,7 +237,7 @@ async function sendEmails(order, p24Id='TEST') {
             const b64 = i.snapshot.replace('data:image/png;base64,', '');
             const filename = `polka-${n+1}.png`;
             attachments.push({ filename, content: b64 });
-            imgHtml = `<img src="cid:${filename}" style="width:120px;height:120px;object-fit:contain;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;" />`;
+            imgHtml = `<img src="${i.snapshot}" width="120" height="120" style="object-fit:contain;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;" />`;
         }
         return `<tr>
             <td style="padding:12px;vertical-align:middle">${imgHtml}</td>
