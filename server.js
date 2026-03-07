@@ -1,4 +1,3 @@
-require('dotenv').config();
 const express = require('express');
 const crypto  = require('crypto');
 const fs      = require('fs');
@@ -41,21 +40,11 @@ const P24_SECRET   = process.env.P24_SECRET  || '';
 const SITE_URL     = process.env.SITE_URL    || '';
 const TEST_MODE    = (P24_MERCHANT === 0);
 const ADMIN_PASS   = process.env.ADMIN_PASSWORD || 'polki2024';
+const RESEND_KEY   = process.env.RESEND_API_KEY || '';
+const MAIL_TO      = process.env.MAIL_TO || '';
 
-// Email
-let mailer = null;
-try {
-    const nodemailer = require('nodemailer');
-    mailer = nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 465, secure: true,
-        auth: { 
-            user: process.env.SMTP_USER, 
-            pass: process.env.SMTP_PASS
-        }
-    });
-    console.log('📧 Mailer zainicjalizowany:', process.env.SMTP_USER);
-} catch(e) { console.log('❌ Błąd mailera:', e.message); }
+console.log('📧 RESEND_KEY:', RESEND_KEY ? `ustawiony (${RESEND_KEY.slice(0,8)}...)` : 'BRAK');
+console.log('📧 MAIL_TO:', MAIL_TO || 'BRAK');
 
 function p24Sign(data) {
     return crypto.createHash('sha384').update(JSON.stringify(data)).digest('hex');
@@ -66,7 +55,7 @@ app.use('/api/create-order', rateLimit({ windowMs: 15*60*1000, max: 15 }));
 // Health check
 app.get('/', (req, res) => res.json({ status: 'ok', mode: TEST_MODE ? 'test' : 'production' }));
 
-// ─── PANEL ZAMÓWIEŃ ───────────────────────────────────────────────────────────
+// Panel zamówień
 app.get('/zamowienia', (req, res) => {
     const pass = req.query.pass;
     if (pass !== ADMIN_PASS) {
@@ -140,7 +129,7 @@ app.get('/zamowienia', (req, res) => {
     </div></body></html>`);
 });
 
-// ─── TWORZENIE ZAMÓWIENIA ─────────────────────────────────────────────────────
+// Tworzenie zamówienia
 app.post('/api/create-order', async (req, res) => {
     try {
         const { customer, cart, totals } = req.body;
@@ -169,7 +158,7 @@ app.post('/api/create-order', async (req, res) => {
 
         if (TEST_MODE) {
             order.status = 'paid_test';
-            if (mailer) await sendOwnerEmail(order, 'TEST');
+            await sendEmails(order, 'TEST');
             const returnUrl = `https://konfiguratorpolki.github.io/nowyprojekt3/thank-you.html?session=${encodeURIComponent(sessionId)}`;
             return res.json({ redirectUrl: returnUrl });
         }
@@ -229,41 +218,60 @@ app.post('/api/p24-notify', async (req, res) => {
         order.p24_order_id = String(orderId);
         order.paid_at = new Date().toISOString();
         fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
-        if (mailer) { await sendOwnerEmail(order, orderId); await sendCustomerEmail(order); }
+        await sendEmails(order, orderId);
         return res.status(200).send('OK');
     } catch(e) { return res.status(500).send('Error'); }
 });
 
-async function sendOwnerEmail(order, p24Id='?') {
-    if (!mailer) return;
+// Wysyłka emaili przez Resend API
+async function sendEmails(order, p24Id='TEST') {
+    if (!RESEND_KEY) { console.log('⚠️ Brak RESEND_API_KEY — email pominięty'); return; }
     const cart  = JSON.parse(order.cart_json || '[]');
     const total = ((order.total_amount||0)/100).toFixed(2);
     const items = cart.map((i,n)=>`${n+1}. ${i.name} x${i.quantity} | ${(i.price*i.quantity).toFixed(2)} zł`).join('\n');
-    await mailer.sendMail({
-        from: process.env.MAIL_FROM || process.env.SMTP_USER,
-        to:   process.env.MAIL_TO   || process.env.SMTP_USER,
-        subject: `🛒 Nowe zamówienie #${order.order_uuid.slice(0,8)} — ${total} zł`,
-        html: `<h2>🛒 Nowe zamówienie!</h2>
-               <p><b>Klient:</b> ${order.customer_name}<br><b>Email:</b> ${order.customer_email}<br>
-               <b>Telefon:</b> ${order.customer_phone}<br><b>Adres:</b> ${order.customer_address}<br>
-               <b>Uwagi:</b> ${order.customer_notes||'-'}</p>
-               <pre style="background:#f5f5f5;padding:12px">${items}</pre>
-               <p><b>Łącznie: ${total} zł</b></p>`
-    });
-}
-async function sendCustomerEmail(order) {
-    if (!mailer) return;
-    const total = ((order.total_amount||0)/100).toFixed(2);
-    await mailer.sendMail({
-        from: process.env.MAIL_FROM || process.env.SMTP_USER,
-        to:   order.customer_email,
-        subject: `Potwierdzenie zamówienia #${order.order_uuid.slice(0,8)}`,
-        html: `<h2 style="color:green">Dziękujemy! 🎉</h2>
-               <p>Cześć <b>${order.customer_name}</b>,<br>
-               Realizacja: <b>3–5 dni roboczych</b><br>
-               Kwota: <b>${total} zł</b><br>
-               Adres: ${order.customer_address}</p>`
-    });
+
+    // Email do właściciela
+    try {
+        const r = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                from: 'Konfigurator Półek <onboarding@resend.dev>',
+                to: [MAIL_TO || order.customer_email],
+                subject: `🛒 Nowe zamówienie #${order.order_uuid.slice(0,8)} — ${total} zł`,
+                html: `<h2>🛒 Nowe zamówienie!</h2>
+                       <p><b>Klient:</b> ${order.customer_name}<br>
+                       <b>Email:</b> ${order.customer_email}<br>
+                       <b>Telefon:</b> ${order.customer_phone}<br>
+                       <b>Adres:</b> ${order.customer_address}<br>
+                       <b>Uwagi:</b> ${order.customer_notes||'-'}</p>
+                       <pre style="background:#f5f5f5;padding:12px">${items}</pre>
+                       <p><b>Łącznie: ${total} zł</b></p>`
+            })
+        });
+        const data = await r.json();
+        if (r.ok) console.log('📧 Email do właściciela wysłany:', data.id);
+        else console.log('❌ Email błąd:', JSON.stringify(data));
+    } catch(e) { console.log('❌ Email wyjątek:', e.message); }
+
+    // Email do klienta
+    try {
+        await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                from: 'Konfigurator Półek <onboarding@resend.dev>',
+                to: [order.customer_email],
+                subject: `Potwierdzenie zamówienia #${order.order_uuid.slice(0,8)}`,
+                html: `<h2 style="color:green">Dziękujemy! 🎉</h2>
+                       <p>Cześć <b>${order.customer_name}</b>,<br>
+                       Realizacja: <b>3–5 dni roboczych</b><br>
+                       Kwota: <b>${total} zł</b><br>
+                       Adres: ${order.customer_address}</p>`
+            })
+        });
+        console.log('📧 Email do klienta wysłany');
+    } catch(e) { console.log('❌ Email klient wyjątek:', e.message); }
 }
 
 const PORT = process.env.PORT || 3000;
