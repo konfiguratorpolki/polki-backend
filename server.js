@@ -7,7 +7,7 @@ const rateLimit = require('express-rate-limit');
 
 const app = express();
 
-// CORS — pozwól GitHub Pages łączyć się z backendem
+// CORS
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,OPTIONS');
@@ -18,10 +18,10 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '5mb' }));
 
-// Zapis zamówień do pliku JSON (zamiast SQLite)
+// Zamówienia w pliku JSON
 const ORDERS_FILE = path.join(__dirname, 'orders.json');
 function loadOrders() {
-    try { return JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf8')); } 
+    try { return JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf8')); }
     catch(e) { return []; }
 }
 function saveOrder(order) {
@@ -39,6 +39,7 @@ const P24_API_KEY  = process.env.P24_API_KEY || '';
 const P24_SECRET   = process.env.P24_SECRET  || '';
 const SITE_URL     = process.env.SITE_URL    || '';
 const TEST_MODE    = (P24_MERCHANT === 0);
+const ADMIN_PASS   = process.env.ADMIN_PASSWORD || 'polki2024';
 
 // Email
 let mailer = null;
@@ -62,11 +63,84 @@ app.use('/api/create-order', rateLimit({ windowMs: 15*60*1000, max: 15 }));
 // Health check
 app.get('/', (req, res) => res.json({ status: 'ok', mode: TEST_MODE ? 'test' : 'production' }));
 
-// Tworzenie zamówienia
+// ─── PANEL ZAMÓWIEŃ ───────────────────────────────────────────────────────────
+app.get('/zamowienia', (req, res) => {
+    const pass = req.query.pass;
+    if (pass !== ADMIN_PASS) {
+        return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8">
+        <title>Panel zamówień</title>
+        <style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f3f4f6}
+        .box{background:white;padding:40px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.1);text-align:center}
+        input{padding:10px 16px;border:1px solid #ddd;border-radius:8px;margin:10px 0;width:200px;font-size:16px}
+        button{padding:10px 24px;background:#16a34a;color:white;border:none;border-radius:8px;cursor:pointer;font-size:16px}</style>
+        </head><body><div class="box"><h2>🔐 Panel zamówień</h2>
+        <form onsubmit="location.href='/zamowienia?pass='+document.getElementById('p').value;return false">
+        <input id="p" type="password" placeholder="Hasło"><br>
+        <button type="submit">Zaloguj</button></form></div></body></html>`);
+    }
+
+    const orders = loadOrders().reverse();
+    const rows = orders.map(o => {
+        const cart = JSON.parse(o.cart_json || '[]');
+        const total = ((o.total_amount||0)/100).toFixed(2);
+        const statusColor = o.status === 'paid' ? '#16a34a' : o.status === 'paid_test' ? '#ca8a04' : '#6b7280';
+        const statusLabel = o.status === 'paid' ? '✅ Opłacone' : o.status === 'paid_test' ? '🧪 Test' : '⏳ Oczekuje';
+        const items = cart.map(i => `${i.name} x${i.quantity}`).join(', ');
+        const date = new Date(o.created_at).toLocaleString('pl-PL');
+        return `<tr>
+            <td>${date}</td>
+            <td><b>${o.customer_name}</b><br><small>${o.customer_email}</small><br><small>${o.customer_phone}</small></td>
+            <td><small>${o.customer_address}</small></td>
+            <td><small>${items}</small></td>
+            <td><b>${total} zł</b></td>
+            <td style="color:${statusColor}">${statusLabel}</td>
+            <td><small>${o.order_uuid.slice(0,8)}</small></td>
+        </tr>`;
+    }).join('');
+
+    const totalRevenue = orders.filter(o => o.status === 'paid' || o.status === 'paid_test')
+        .reduce((s, o) => s + (o.total_amount||0), 0) / 100;
+
+    res.send(`<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>Panel zamówień</title>
+    <style>
+        body{font-family:sans-serif;margin:0;background:#f3f4f6;color:#111}
+        .header{background:#16a34a;color:white;padding:20px 32px;display:flex;justify-content:space-between;align-items:center}
+        .header h1{margin:0;font-size:22px}
+        .stats{display:flex;gap:16px;padding:24px 32px}
+        .stat{background:white;border-radius:10px;padding:16px 24px;flex:1;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+        .stat .val{font-size:28px;font-weight:bold;color:#16a34a}
+        .stat .lbl{color:#6b7280;font-size:14px}
+        .table-wrap{padding:0 32px 32px}
+        table{width:100%;border-collapse:collapse;background:white;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+        th{background:#f9fafb;padding:12px 16px;text-align:left;font-size:13px;color:#6b7280;border-bottom:1px solid #e5e7eb}
+        td{padding:12px 16px;border-bottom:1px solid #f3f4f6;vertical-align:top;font-size:14px}
+        tr:hover td{background:#f9fafb}
+        .empty{text-align:center;padding:48px;color:#6b7280}
+    </style>
+    </head><body>
+    <div class="header"><h1>🛒 Panel zamówień — Konfigurator Półek</h1>
+    <span>${orders.length} zamówień</span></div>
+    <div class="stats">
+        <div class="stat"><div class="val">${orders.length}</div><div class="lbl">Wszystkie zamówienia</div></div>
+        <div class="stat"><div class="val">${orders.filter(o=>o.status==='paid').length}</div><div class="lbl">Opłacone</div></div>
+        <div class="stat"><div class="val">${totalRevenue.toFixed(2)} zł</div><div class="lbl">Łączna wartość</div></div>
+    </div>
+    <div class="table-wrap">
+    ${orders.length === 0 ? '<div class="empty">Brak zamówień</div>' : `
+    <table>
+        <thead><tr>
+            <th>Data</th><th>Klient</th><th>Adres</th><th>Produkty</th><th>Kwota</th><th>Status</th><th>Nr</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+    </table>`}
+    </div></body></html>`);
+});
+
+// ─── TWORZENIE ZAMÓWIENIA ─────────────────────────────────────────────────────
 app.post('/api/create-order', async (req, res) => {
     try {
         const { customer, cart, totals } = req.body;
-
         if (!customer?.fullName || !customer?.email || !customer?.phone || !customer?.address)
             return res.status(400).json({ error: 'Brakujące dane klienta.' });
         if (!cart?.length)
@@ -80,33 +154,23 @@ app.post('/api/create-order', async (req, res) => {
         const sessionId = `POLKA-${orderUuid}`;
 
         const order = {
-            order_uuid: orderUuid,
-            p24_session_id: sessionId,
-            customer_name: customer.fullName,
-            customer_email: customer.email,
-            customer_phone: customer.phone,
-            customer_address: customer.address,
-            customer_notes: customer.notes || '',
-            cart_json: JSON.stringify(cart),
-            total_amount: amountGrosze,
-            status: 'pending',
+            order_uuid: orderUuid, p24_session_id: sessionId,
+            customer_name: customer.fullName, customer_email: customer.email,
+            customer_phone: customer.phone, customer_address: customer.address,
+            customer_notes: customer.notes || '', cart_json: JSON.stringify(cart),
+            total_amount: amountGrosze, status: 'pending',
             created_at: new Date().toISOString()
         };
-
         saveOrder(order);
         console.log(`✅ Zamówienie: ${orderUuid} | ${customer.fullName} | ${(amountGrosze/100).toFixed(2)} zł`);
 
-        // TRYB TESTOWY
         if (TEST_MODE) {
             order.status = 'paid_test';
             if (mailer) await sendOwnerEmail(order, 'TEST');
-            const returnUrl = SITE_URL
-                ? `${SITE_URL}/thank-you.html?session=${encodeURIComponent(sessionId)}`
-                : `https://konfiguratorpolki.github.io/nowyprojekt3/thank-you.html?session=${encodeURIComponent(sessionId)}`;
+            const returnUrl = `https://konfiguratorpolki.github.io/nowyprojekt3/thank-you.html?session=${encodeURIComponent(sessionId)}`;
             return res.json({ redirectUrl: returnUrl });
         }
 
-        // TRYB PRODUKCYJNY z P24
         const returnUrl = `${SITE_URL}/thank-you.html?session=${encodeURIComponent(sessionId)}`;
         const p24Payload = {
             merchantId: P24_MERCHANT, posId: P24_POS_ID,
@@ -123,37 +187,31 @@ app.post('/api/create-order', async (req, res) => {
 
         const p24Res = await fetch(`${P24_BASE}/api/v1/transaction/register`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Basic ' + Buffer.from(`${P24_POS_ID}:${P24_SECRET}`).toString('base64'),
-            },
+            headers: { 'Content-Type': 'application/json',
+                'Authorization': 'Basic ' + Buffer.from(`${P24_POS_ID}:${P24_SECRET}`).toString('base64') },
             body: JSON.stringify(p24Payload),
         });
         const p24Data = await p24Res.json();
-
         if (!p24Res.ok || p24Data.error || !p24Data.data?.token) {
-            console.error('❌ P24 error:', JSON.stringify(p24Data));
+            console.error('❌ P24:', JSON.stringify(p24Data));
             return res.status(502).json({ error: 'Błąd bramki płatności.' });
         }
-
         return res.json({ redirectUrl: `${P24_BASE}/trnRequest/${p24Data.data.token}` });
 
     } catch (err) {
-        console.error('❌ Error:', err.message);
+        console.error('❌', err.message);
         return res.status(500).json({ error: 'Błąd serwera: ' + err.message });
     }
 });
 
-// IPN od P24
+// IPN
 app.post('/api/p24-notify', async (req, res) => {
     try {
         const { sessionId, amount, currency, orderId, sign } = req.body;
         if (sign !== p24Sign({ sessionId, orderId, amount, currency, crc: P24_API_KEY }))
             return res.status(400).send('Invalid signature');
-
         const verifyPayload = { merchantId:P24_MERCHANT, posId:P24_POS_ID, sessionId, amount, currency, orderId };
         verifyPayload.sign = p24Sign({ sessionId, orderId, amount, currency, crc: P24_API_KEY });
-
         const vRes = await fetch(`${P24_BASE}/api/v1/transaction/verify`, {
             method: 'PUT',
             headers: { 'Content-Type':'application/json',
@@ -161,7 +219,6 @@ app.post('/api/p24-notify', async (req, res) => {
             body: JSON.stringify(verifyPayload),
         });
         if (!vRes.ok) return res.status(400).send('Verification failed');
-
         const orders = loadOrders();
         const order = orders.find(o => o.p24_session_id === sessionId);
         if (!order) return res.status(404).send('Not found');
@@ -169,34 +226,28 @@ app.post('/api/p24-notify', async (req, res) => {
         order.p24_order_id = String(orderId);
         order.paid_at = new Date().toISOString();
         fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
-
         if (mailer) { await sendOwnerEmail(order, orderId); await sendCustomerEmail(order); }
         return res.status(200).send('OK');
     } catch(e) { return res.status(500).send('Error'); }
 });
 
-// Emaile
 async function sendOwnerEmail(order, p24Id='?') {
     if (!mailer) return;
     const cart  = JSON.parse(order.cart_json || '[]');
     const total = ((order.total_amount||0)/100).toFixed(2);
-    const items = cart.map((i,n)=>`${n+1}. ${i.name} x${i.quantity} | ${i.summary} | ${(i.price*i.quantity).toFixed(2)} zł`).join('\n');
+    const items = cart.map((i,n)=>`${n+1}. ${i.name} x${i.quantity} | ${(i.price*i.quantity).toFixed(2)} zł`).join('\n');
     await mailer.sendMail({
         from: process.env.MAIL_FROM || process.env.SMTP_USER,
         to:   process.env.MAIL_TO   || process.env.SMTP_USER,
         subject: `🛒 Nowe zamówienie #${order.order_uuid.slice(0,8)} — ${total} zł`,
         html: `<h2>🛒 Nowe zamówienie!</h2>
-               <p><b>Klient:</b> ${order.customer_name}<br>
-               <b>Email:</b> ${order.customer_email}<br>
-               <b>Telefon:</b> ${order.customer_phone}<br>
-               <b>Adres:</b> ${order.customer_address}<br>
+               <p><b>Klient:</b> ${order.customer_name}<br><b>Email:</b> ${order.customer_email}<br>
+               <b>Telefon:</b> ${order.customer_phone}<br><b>Adres:</b> ${order.customer_address}<br>
                <b>Uwagi:</b> ${order.customer_notes||'-'}</p>
                <pre style="background:#f5f5f5;padding:12px">${items}</pre>
                <p><b>Łącznie: ${total} zł</b></p>`
     });
-    console.log('📧 Email wysłany do właściciela');
 }
-
 async function sendCustomerEmail(order) {
     if (!mailer) return;
     const total = ((order.total_amount||0)/100).toFixed(2);
@@ -205,8 +256,7 @@ async function sendCustomerEmail(order) {
         to:   order.customer_email,
         subject: `Potwierdzenie zamówienia #${order.order_uuid.slice(0,8)}`,
         html: `<h2 style="color:green">Dziękujemy! 🎉</h2>
-               <p>Cześć <b>${order.customer_name}</b>,</p>
-               <p>Przyjęliśmy Twoje zamówienie.<br>
+               <p>Cześć <b>${order.customer_name}</b>,<br>
                Realizacja: <b>3–5 dni roboczych</b><br>
                Kwota: <b>${total} zł</b><br>
                Adres: ${order.customer_address}</p>`
@@ -215,6 +265,6 @@ async function sendCustomerEmail(order) {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`✅ Backend działa na porcie ${PORT}`);
-    console.log(`   Tryb: ${TEST_MODE ? '⚠️  TESTOWY' : '✅ PRODUKCJA P24'}`);
+    console.log(`✅ Backend port ${PORT} | Tryb: ${TEST_MODE ? 'TESTOWY' : 'PRODUKCJA'}`);
+    console.log(`📋 Panel zamówień: /zamowienia?pass=${ADMIN_PASS}`);
 });
