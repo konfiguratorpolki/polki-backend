@@ -271,6 +271,6 @@ async function sendCustomerEmail(order) {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`✅ Backend port ${PORT} | Tryb: ${TEST_MODE ? 'TESTOWY' : 'PRODUKCJA'}`);
+    console.log(`✅ Backend port ${PORT} | Tryb: ${TEST_MODE ? 'TESTOWY v2' : 'PRODUKCJA'}`);
     console.log(`📋 Panel zamówień: /zamowienia?pass=${ADMIN_PASS}`);
 });
