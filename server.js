@@ -73,7 +73,6 @@ app.post('/api/paynow-init', rateLimit({ windowMs: 15*60*1000, max: 20 }), async
     try {
         const { amount, orderData } = req.body;
         if (!amount || !orderData) return res.status(400).json({ error: 'Brak danych' });
-        console.log('\uD83D\uDCDE Telefon z formularza:', JSON.stringify(orderData.phone));
 
         const externalId = 'PN-' + crypto.randomUUID().slice(0, 13).toUpperCase();
         const RETURN_URL = (process.env.SITE_URL || 'https://konfiguratorpolki.github.io') + '/?payment=success';
@@ -86,7 +85,8 @@ app.post('/api/paynow-init', rateLimit({ windowMs: 15*60*1000, max: 20 }), async
             buyer: {
                 email:     orderData.email,
                 firstName: orderData.firstName,
-                lastName:  orderData.lastName
+                lastName:  orderData.lastName,
+                phone:     orderData.phone || undefined
             },
             continueUrl: RETURN_URL
         };
@@ -202,7 +202,7 @@ app.post('/api/paynow-notify', async (req, res) => {
                     date_add:              Math.floor(Date.now()/1000),
                     currency:              'PLN',
                     payment_method:        'PayNow (online)',
-                    payment_done:          amount / 100,
+                    paid:                  1,
                     delivery_method:       'kurier',
                     delivery_price:        orderData.shipping || 0,
                     delivery_fullname:     `${orderData.firstName} ${orderData.lastName}`,
