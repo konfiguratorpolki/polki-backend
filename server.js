@@ -85,8 +85,7 @@ app.post('/api/paynow-init', rateLimit({ windowMs: 15*60*1000, max: 20 }), async
             buyer: {
                 email:     orderData.email,
                 firstName: orderData.firstName,
-                lastName:  orderData.lastName,
-                phone:     orderData.phone || undefined
+                lastName:  orderData.lastName
             },
             continueUrl: RETURN_URL
         };
