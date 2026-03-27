@@ -73,6 +73,7 @@ app.post('/api/paynow-init', rateLimit({ windowMs: 15*60*1000, max: 20 }), async
     try {
         const { amount, orderData } = req.body;
         if (!amount || !orderData) return res.status(400).json({ error: 'Brak danych' });
+        console.log('\uD83D\uDCDE Telefon z formularza:', JSON.stringify(orderData.phone));
 
         const externalId = 'PN-' + crypto.randomUUID().slice(0, 13).toUpperCase();
         const RETURN_URL = (process.env.SITE_URL || 'https://konfiguratorpolki.github.io') + '/?payment=success';
