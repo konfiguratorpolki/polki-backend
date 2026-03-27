@@ -43,6 +43,16 @@ const ADMIN_PASS   = process.env.ADMIN_PASSWORD || 'polki2024';
 const RESEND_KEY   = process.env.RESEND_API_KEY || '';
 const MAIL_TO      = process.env.MAIL_TO || '';
 
+// ── PayNow (mBank) ──────────────────────────────────────────
+const PAYNOW_API_KEY       = process.env.PAYNOW_API_KEY       || '';
+const PAYNOW_SIGNATURE_KEY = process.env.PAYNOW_SIGNATURE_KEY || '';
+const PAYNOW_ENV           = process.env.PAYNOW_ENV           || 'sandbox';
+const PAYNOW_API_URL       = PAYNOW_ENV === 'production'
+    ? 'https://api.paynow.pl/v1/payments'
+    : 'https://api.sandbox.paynow.pl/v1/payments';
+// Tymczasowy store oczekujących płatności (w pamięci serwera)
+const pendingPaynow = new Map();
+
 console.log('📧 RESEND_KEY:', RESEND_KEY ? `ustawiony (${RESEND_KEY.slice(0,8)}...)` : 'BRAK');
 console.log('📧 MAIL_TO:', MAIL_TO || 'BRAK');
 
@@ -54,6 +64,192 @@ app.use('/api/create-order', rateLimit({ windowMs: 15*60*1000, max: 15 }));
 
 // Health check
 app.get('/', (req, res) => res.json({ status: 'ok', mode: TEST_MODE ? 'test' : 'production' }));
+
+// ════════════════════════════════════════════════════════════
+//  PAYNOW — Inicjacja płatności
+//  Wywołanie z przeglądarki → zwraca redirectUrl do bramki
+// ════════════════════════════════════════════════════════════
+app.post('/api/paynow-init', rateLimit({ windowMs: 15*60*1000, max: 20 }), async (req, res) => {
+    try {
+        const { amount, orderData } = req.body;
+        if (!amount || !orderData) return res.status(400).json({ error: 'Brak danych' });
+
+        const externalId = 'PN-' + crypto.randomUUID().slice(0, 13).toUpperCase();
+        const RETURN_URL = (process.env.SITE_URL || 'https://konfiguratorpolki.github.io') + '/?payment=success';
+
+        const payload = {
+            amount,
+            currency:    'PLN',
+            externalId,
+            description: 'Zamówienie półki — Nowy Wymiar',
+            buyer: {
+                email:     orderData.email,
+                firstName: orderData.firstName,
+                lastName:  orderData.lastName,
+                phone:     orderData.phone || undefined
+            },
+            continueUrl: RETURN_URL
+        };
+
+        const idempotencyKey = crypto.randomUUID();
+        const signature = crypto
+            .createHmac('sha256', PAYNOW_SIGNATURE_KEY)
+            .update(JSON.stringify(payload))
+            .digest('base64');
+
+        const pnRes = await fetch(PAYNOW_API_URL, {
+            method:  'POST',
+            headers: {
+                'Api-Key':         PAYNOW_API_KEY,
+                'Signature':       signature,
+                'Idempotency-Key': idempotencyKey,
+                'Content-Type':    'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
+        const pnData = await pnRes.json();
+
+        if (!pnRes.ok || !pnData.redirectUrl) {
+            console.error('❌ PayNow init:', JSON.stringify(pnData));
+            return res.status(502).json({ error: pnData.message || 'Błąd PayNow' });
+        }
+
+        // Zapisz dane zamówienia — użyjemy po potwierdzeniu webhookiem
+        pendingPaynow.set(externalId, { orderData, amount, paymentId: pnData.paymentId, createdAt: Date.now() });
+        // Wyczyść stare wpisy (>2h)
+        for (const [k, v] of pendingPaynow) { if (Date.now() - v.createdAt > 7200000) pendingPaynow.delete(k); }
+
+        console.log(`💳 PayNow init: ${externalId} | ${(amount/100).toFixed(2)} zł | ${orderData.email}`);
+        return res.json({ redirectUrl: pnData.redirectUrl, paymentId: pnData.paymentId, externalId });
+
+    } catch (err) {
+        console.error('❌ paynow-init:', err.message);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+// ════════════════════════════════════════════════════════════
+//  PAYNOW — Webhook (IPN)
+//  PayNow wywołuje ten endpoint gdy zmienia się status płatności
+//  Po CONFIRMED → tworzy zamówienie w BaseLinker i wysyła email
+// ════════════════════════════════════════════════════════════
+app.post('/api/paynow-notify', async (req, res) => {
+    try {
+        const receivedSig = req.headers['signature'];
+        const body        = req.body;
+
+        // Weryfikacja podpisu PayNow
+        if (receivedSig && PAYNOW_SIGNATURE_KEY) {
+            const expected = crypto
+                .createHmac('sha256', PAYNOW_SIGNATURE_KEY)
+                .update(JSON.stringify(body))
+                .digest('base64');
+            if (receivedSig !== expected) {
+                console.warn('⚠️ PayNow webhook: zły podpis');
+                return res.status(401).send('Invalid signature');
+            }
+        }
+
+        const { paymentId, status, externalId } = body;
+        console.log(`[PayNow Notify] ${externalId} | ${paymentId} | ${status}`);
+
+        if (status === 'CONFIRMED') {
+            const pending = pendingPaynow.get(externalId);
+            if (!pending) {
+                console.warn(`⚠️ Brak oczekującego zamówienia: ${externalId}`);
+                return res.status(200).send('OK'); // już przetworzone lub wygasłe
+            }
+
+            const { orderData, amount } = pending;
+
+            // Zapisz zamówienie lokalnie
+            const order = {
+                order_uuid:       externalId,
+                p24_session_id:   externalId,
+                customer_name:    `${orderData.firstName} ${orderData.lastName}`,
+                customer_email:   orderData.email,
+                customer_phone:   orderData.phone || '',
+                customer_address: `${orderData.street}, ${orderData.postCode} ${orderData.city}`,
+                customer_notes:   orderData.notes || '',
+                cart_json:        JSON.stringify(orderData.cart || []),
+                total_amount:     amount,
+                status:           'paid',
+                payment_method:   'paynow',
+                paid_at:          new Date().toISOString(),
+                created_at:       new Date().toISOString()
+            };
+            saveOrder(order);
+
+            // Wyślij do BaseLinker
+            try {
+                const BL_URL = process.env.BASELINKER_PROXY_URL || 'https://baselinker-proxy.007lukasz-m.workers.dev';
+                const BL_SOURCE = parseInt(process.env.ORDER_SOURCE_ID || '16611');
+
+                let statusId = 0;
+                try {
+                    const sr = await fetch(BL_URL, { method:'POST', headers:{'Content-Type':'application/json'},
+                        body: JSON.stringify({ method:'getOrderStatusList', parameters:{} }) });
+                    const sd = await sr.json();
+                    if (sd.status === 'SUCCESS' && sd.statuses?.length) {
+                        const f = sd.statuses.find(s => /nowe|oczekuj|new|pending/i.test(s.name));
+                        statusId = f ? f.id : sd.statuses[0].id;
+                    }
+                } catch(e) { console.warn('Statusy BL:', e.message); }
+
+                const blPayload = {
+                    order_status_id:       statusId,
+                    custom_source_id:      BL_SOURCE,
+                    date_add:              Math.floor(Date.now()/1000),
+                    currency:              'PLN',
+                    payment_method:        'PayNow (online)',
+                    payment_done:          amount / 100,
+                    delivery_method:       'kurier',
+                    delivery_price:        orderData.shipping || 0,
+                    delivery_fullname:     `${orderData.firstName} ${orderData.lastName}`,
+                    delivery_address:      orderData.street || '',
+                    delivery_city:         orderData.city   || '',
+                    delivery_postcode:     orderData.postCode || '',
+                    delivery_country_code: 'PL',
+                    email:                 orderData.email,
+                    phone:                 orderData.phone || '',
+                    user_login:            orderData.email,
+                    user_comments:         (orderData.notes||'') + (orderData.orderCode ? '\n\nKod konfiguracji:\n'+orderData.orderCode : ''),
+                    admin_comments:        'Zamówienie opłacone przez PayNow',
+                    want_invoice:          orderData.wantInvoice ? 1 : 0,
+                    invoice_fullname:      orderData.wantInvoice ? `${orderData.firstName} ${orderData.lastName}` : '',
+                    invoice_company:       orderData.invCompany  || '',
+                    invoice_nip:           orderData.invNip      || '',
+                    invoice_address:       orderData.invAddr     || '',
+                    invoice_postcode:      orderData.invPostCode || '',
+                    invoice_country_code:  orderData.wantInvoice ? 'PL' : '',
+                    products: (orderData.cart||[]).map(i => ({
+                        name: i.name, sku: i.code, quantity: i.quantity,
+                        price_brutto: i.price, tax_rate: 23, weight: 2
+                    }))
+                };
+                const blRes = await fetch(BL_URL, { method:'POST', headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({ method:'addOrder', parameters: blPayload }) });
+                const blData = await blRes.json();
+                if (blData.status === 'SUCCESS') {
+                    console.log(`✅ BaseLinker zamówienie #${blData.order_id} dla PayNow ${externalId}`);
+                    order.baselinker_id = blData.order_id;
+                } else {
+                    console.error('❌ BaseLinker:', blData.error_message);
+                }
+            } catch(e) { console.error('❌ BaseLinker wyjątek:', e.message); }
+
+            // Wyślij emaile
+            await sendEmails(order, paymentId);
+
+            pendingPaynow.delete(externalId);
+        }
+
+        return res.status(200).send('OK');
+    } catch(e) {
+        console.error('❌ paynow-notify:', e.message);
+        return res.status(200).send('OK'); // zawsze 200 żeby PayNow nie powtarzał
+    }
+});
 
 // Panel zamówień
 app.get('/zamowienia', (req, res) => {
