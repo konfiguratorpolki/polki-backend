@@ -86,7 +86,9 @@ app.post('/api/paynow-init', rateLimit({ windowMs: 15*60*1000, max: 20 }), async
                 email:     orderData.email,
                 firstName: orderData.firstName,
                 lastName:  orderData.lastName,
-                phone:     orderData.phone || undefined
+                phone:     orderData.phone
+                    ? '+48' + orderData.phone.replace(/\D/g, '').replace(/^48/, '')
+                    : undefined
             },
             continueUrl: RETURN_URL
         };
