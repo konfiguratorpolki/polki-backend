@@ -627,10 +627,12 @@ app.get('/api/invoice-pdf', async (req, res) => {
         const invoiceList = await invoiceListRes.json();
 
         if (invoiceList.status !== 'SUCCESS' || !invoiceList.invoices?.length) {
-            return res.status(404).json({ error: 'Brak faktury dla tego zamówienia' });
+            console.error('❌ getInvoices response:', JSON.stringify(invoiceList));
+            return res.status(404).json({ error: 'Brak faktury dla tego zamówienia', debug: invoiceList });
         }
 
         const invoiceId = invoiceList.invoices[0].invoice_id;
+        console.log(`📄 Faktura ID: ${invoiceId} dla zamówienia ${orderId}`);
 
         // 2. Pobierz plik PDF faktury
         const pdfRes = await fetch(BL_API, {
@@ -641,7 +643,8 @@ app.get('/api/invoice-pdf', async (req, res) => {
         const pdfData = await pdfRes.json();
 
         if (pdfData.status !== 'SUCCESS' || !pdfData.file) {
-            return res.status(404).json({ error: 'Nie można pobrać pliku PDF' });
+            console.error('❌ getInvoiceFile response:', JSON.stringify(pdfData));
+            return res.status(404).json({ error: 'Nie można pobrać pliku PDF', debug: pdfData });
         }
 
         // 3. Zwróć PDF jako plik do pobrania
