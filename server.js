@@ -20,6 +20,8 @@ app.use(express.json({ limit: '5mb' }));
 
 // Zamówienia w pliku JSON
 const ORDERS_FILE = path.join(__dirname, 'orders.json');
+const SNAPSHOTS_FILE = path.join(__dirname, 'snapshots.json');
+
 function loadOrders() {
     try { return JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf8')); }
     catch(e) { return []; }
@@ -28,6 +30,18 @@ function saveOrder(order) {
     const orders = loadOrders();
     orders.push(order);
     fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
+}
+function saveSnapshots(orderId, snaps) {
+    let all = {};
+    try { all = JSON.parse(fs.readFileSync(SNAPSHOTS_FILE, 'utf8')); } catch(e) {}
+    all[orderId] = snaps;
+    fs.writeFileSync(SNAPSHOTS_FILE, JSON.stringify(all));
+}
+function loadSnapshots(orderId) {
+    try {
+        const all = JSON.parse(fs.readFileSync(SNAPSHOTS_FILE, 'utf8'));
+        return all[orderId] || [];
+    } catch(e) { return []; }
 }
 
 // Konfiguracja
@@ -178,6 +192,12 @@ app.post('/api/paynow-notify', async (req, res) => {
                 created_at:       new Date().toISOString()
             };
             saveOrder(order);
+
+            // Zapisz snapshoty
+            try {
+                const snaps = (orderData.cart||[]).map(i=>({code:i.code,snapshot:i.snapshot||''})).filter(i=>i.snapshot);
+                if (snaps.length > 0) saveSnapshots(externalId, snaps);
+            } catch(e) { console.warn('Snapshoty:', e.message); }
 
             // Wyślij do BaseLinker
             try {
@@ -356,6 +376,12 @@ app.post('/api/test-order', async (req, res) => {
         saveOrder(order);
         console.log(`🧪 TEST zamówienie: ${externalId} | ${orderData.email} | ${(amount/100).toFixed(2)} zł`);
 
+        // Zapisz snapshoty do pliku
+        try {
+            const snaps = (orderData.cart||[]).map(i => ({ code: i.code, snapshot: i.snapshot||'' })).filter(i=>i.snapshot);
+            if (snaps.length > 0) saveSnapshots(externalId, snaps);
+        } catch(e) { console.warn('Snapshoty:', e.message); }
+
         // Wyślij do BaseLinker (identycznie jak webhook PayNow)
         try {
             const BL_URL    = process.env.BASELINKER_PROXY_URL || 'https://baselinker-proxy.007lukasz-m.workers.dev';
@@ -378,7 +404,7 @@ app.post('/api/test-order', async (req, res) => {
                 date_add:              Math.floor(Date.now() / 1000),
                 currency:              'PLN',
                 payment_method:        '🧪 TEST (bez płatności)',
-                paid:                  1,
+                paid:                  0,
                 delivery_method:       'kurier',
                 delivery_price:        orderData.shipping || 0,
                 delivery_fullname:     `${orderData.firstName} ${orderData.lastName}`,
@@ -665,6 +691,31 @@ app.get('/api/invoice-pdf', async (req, res) => {
 
     } catch (err) {
         console.error('❌ invoice-pdf:', err.message);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+// ════════════════════════════════════════════════════════════
+//  Snapshoty 3D dla strony zamówienia
+//  GET /api/order-snapshots?order_uuid=XXX  lub  ?bl_order_id=123
+// ════════════════════════════════════════════════════════════
+app.get('/api/order-snapshots', (req, res) => {
+    try {
+        const { order_uuid, bl_order_id } = req.query;
+        let key = order_uuid;
+
+        // Szukaj po bl_order_id jeśli podano
+        if (!key && bl_order_id) {
+            const orders = loadOrders();
+            const found = orders.find(o => String(o.baselinker_id) === String(bl_order_id));
+            if (found) key = found.order_uuid || found.p24_session_id;
+        }
+
+        if (!key) return res.status(400).json({ error: 'Brak order_uuid lub bl_order_id' });
+
+        const snaps = loadSnapshots(key);
+        return res.json({ snapshots: snaps });
+    } catch(err) {
         return res.status(500).json({ error: err.message });
     }
 });
