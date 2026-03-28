@@ -193,11 +193,8 @@ app.post('/api/paynow-notify', async (req, res) => {
             };
             saveOrder(order);
 
-            // Zapisz snapshoty
-            try {
-                const snaps = (orderData.cart||[]).map(i=>({code:i.code,snapshot:i.snapshot||''})).filter(i=>i.snapshot);
-                if (snaps.length > 0) saveSnapshots(externalId, snaps);
-            } catch(e) { console.warn('Snapshoty:', e.message); }
+            // Snapshoty zapiszemy po poznaniu bl_order_id
+            const snapsToSave = (orderData.cart||[]).map(i=>({code:i.code,snapshot:i.snapshot||''})).filter(i=>i.snapshot);
 
             // Wyślij do BaseLinker
             try {
@@ -252,6 +249,8 @@ app.post('/api/paynow-notify', async (req, res) => {
                 if (blData.status === 'SUCCESS') {
                     console.log(`✅ BaseLinker zamówienie #${blData.order_id} dla PayNow ${externalId}`);
                     order.baselinker_id = blData.order_id;
+                    // Zapisz snapshoty pod bl_order_id
+                    try { if (snapsToSave.length > 0) saveSnapshots(String(blData.order_id), snapsToSave); } catch(e) {}
                 } else {
                     console.error('❌ BaseLinker:', blData.error_message);
                 }
@@ -376,11 +375,8 @@ app.post('/api/test-order', async (req, res) => {
         saveOrder(order);
         console.log(`🧪 TEST zamówienie: ${externalId} | ${orderData.email} | ${(amount/100).toFixed(2)} zł`);
 
-        // Zapisz snapshoty do pliku
-        try {
-            const snaps = (orderData.cart||[]).map(i => ({ code: i.code, snapshot: i.snapshot||'' })).filter(i=>i.snapshot);
-            if (snaps.length > 0) saveSnapshots(externalId, snaps);
-        } catch(e) { console.warn('Snapshoty:', e.message); }
+        // Zapisz snapshoty tymczasowo (bl_order_id poznamy po odpowiedzi BL)
+        const snapsToSave = (orderData.cart||[]).map(i => ({ code: i.code, snapshot: i.snapshot||'' })).filter(i=>i.snapshot);
 
         // Wyślij do BaseLinker (identycznie jak webhook PayNow)
         try {
@@ -437,6 +433,8 @@ app.post('/api/test-order', async (req, res) => {
             if (blData.status === 'SUCCESS') {
                 console.log(`✅ BaseLinker TEST zamówienie #${blData.order_id}`);
                 order.baselinker_id = blData.order_id;
+                // Zapisz snapshoty pod bl_order_id
+                try { if (snapsToSave.length > 0) saveSnapshots(String(blData.order_id), snapsToSave); } catch(e) {}
                 // Wyślij emaile
                 await sendEmails(order, 'TEST');
                 return res.json({ success: true, baselinker_id: blData.order_id, order_uuid: externalId });
@@ -697,23 +695,13 @@ app.get('/api/invoice-pdf', async (req, res) => {
 
 // ════════════════════════════════════════════════════════════
 //  Snapshoty 3D dla strony zamówienia
-//  GET /api/order-snapshots?order_uuid=XXX  lub  ?bl_order_id=123
+//  GET /api/order-snapshots?bl_order_id=123
 // ════════════════════════════════════════════════════════════
 app.get('/api/order-snapshots', (req, res) => {
     try {
-        const { order_uuid, bl_order_id } = req.query;
-        let key = order_uuid;
-
-        // Szukaj po bl_order_id jeśli podano
-        if (!key && bl_order_id) {
-            const orders = loadOrders();
-            const found = orders.find(o => String(o.baselinker_id) === String(bl_order_id));
-            if (found) key = found.order_uuid || found.p24_session_id;
-        }
-
-        if (!key) return res.status(400).json({ error: 'Brak order_uuid lub bl_order_id' });
-
-        const snaps = loadSnapshots(key);
+        const { bl_order_id } = req.query;
+        if (!bl_order_id) return res.status(400).json({ error: 'Brak bl_order_id' });
+        const snaps = loadSnapshots(String(bl_order_id));
         return res.json({ snapshots: snaps });
     } catch(err) {
         return res.status(500).json({ error: err.message });
