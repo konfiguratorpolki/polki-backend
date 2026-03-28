@@ -642,13 +642,20 @@ app.get('/api/invoice-pdf', async (req, res) => {
         });
         const pdfData = await pdfRes.json();
 
-        if (pdfData.status !== 'SUCCESS' || !pdfData.file) {
-            console.error('❌ getInvoiceFile response:', JSON.stringify(pdfData));
+        if (pdfData.status !== 'SUCCESS' || (!pdfData.file && !pdfData.invoice)) {
+            console.error('❌ getInvoiceFile response:', JSON.stringify(pdfData).slice(0, 200));
             return res.status(404).json({ error: 'Nie można pobrać pliku PDF', debug: pdfData });
         }
 
+        // BaseLinker zwraca pole 'invoice' jako data URI lub 'file' jako base64
+        let base64Data = pdfData.file || pdfData.invoice || '';
+        // Usuń prefix "data:application/pdf;base64," jeśli istnieje
+        if (base64Data.includes(',')) {
+            base64Data = base64Data.split(',')[1];
+        }
+
         // 3. Zwróć PDF jako plik do pobrania
-        const pdfBuffer = Buffer.from(pdfData.file, 'base64');
+        const pdfBuffer = Buffer.from(base64Data, 'base64');
         const filename = `faktura-${orderId}.pdf`;
 
         res.setHeader('Content-Type', 'application/pdf');
