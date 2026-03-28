@@ -605,6 +605,60 @@ async function sendEmails(order, p24Id='TEST') {
     } catch(e) { console.log('❌ Email klient wyjątek:', e.message); }
 }
 
+const BASELINKER_TOKEN = process.env.BASELINKER_TOKEN || '';
+const BL_API = 'https://api.baselinker.com/connector.php';
+
+// ════════════════════════════════════════════════════════════
+//  BaseLinker — Pobierz PDF faktury dla zamówienia
+//  GET /api/invoice-pdf?order_id=123
+// ════════════════════════════════════════════════════════════
+app.get('/api/invoice-pdf', async (req, res) => {
+    try {
+        const orderId = parseInt(req.query.order_id);
+        if (!orderId) return res.status(400).json({ error: 'Brak order_id' });
+        if (!BASELINKER_TOKEN) return res.status(500).json({ error: 'Brak tokena BaseLinker' });
+
+        // 1. Pobierz listę faktur dla zamówienia
+        const invoiceListRes = await fetch(BL_API, {
+            method: 'POST',
+            headers: { 'X-BLToken': BASELINKER_TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `method=getInvoices&parameters=${encodeURIComponent(JSON.stringify({ order_id: orderId }))}`
+        });
+        const invoiceList = await invoiceListRes.json();
+
+        if (invoiceList.status !== 'SUCCESS' || !invoiceList.invoices?.length) {
+            return res.status(404).json({ error: 'Brak faktury dla tego zamówienia' });
+        }
+
+        const invoiceId = invoiceList.invoices[0].invoice_id;
+
+        // 2. Pobierz plik PDF faktury
+        const pdfRes = await fetch(BL_API, {
+            method: 'POST',
+            headers: { 'X-BLToken': BASELINKER_TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `method=getInvoiceFile&parameters=${encodeURIComponent(JSON.stringify({ invoice_id: invoiceId }))}`
+        });
+        const pdfData = await pdfRes.json();
+
+        if (pdfData.status !== 'SUCCESS' || !pdfData.file) {
+            return res.status(404).json({ error: 'Nie można pobrać pliku PDF' });
+        }
+
+        // 3. Zwróć PDF jako plik do pobrania
+        const pdfBuffer = Buffer.from(pdfData.file, 'base64');
+        const filename = `faktura-${orderId}.pdf`;
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Content-Length', pdfBuffer.length);
+        return res.send(pdfBuffer);
+
+    } catch (err) {
+        console.error('❌ invoice-pdf:', err.message);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`✅ Backend port ${PORT} | Tryb: ${TEST_MODE ? 'TESTOWY' : 'PRODUKCJA'}`);
