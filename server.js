@@ -324,6 +324,114 @@ app.get('/zamowienia', (req, res) => {
     </div></body></html>`);
 });
 
+// ════════════════════════════════════════════════════════════
+//  🧪 ENDPOINT TESTOWY — USUŃ PRZED WDROŻENIEM NA PRODUKCJĘ
+//  Symuluje pełny flow po CONFIRMED z PayNow:
+//  zapisuje zamówienie, wysyła do BaseLinker, wysyła emaile
+//  Wywołanie: POST /api/test-order { amount, orderData }
+// ════════════════════════════════════════════════════════════
+app.post('/api/test-order', async (req, res) => {
+    try {
+        const { amount, orderData } = req.body;
+        if (!amount || !orderData) return res.status(400).json({ error: 'Brak danych' });
+
+        const externalId = 'TEST-' + crypto.randomUUID().slice(0, 13).toUpperCase();
+
+        // Zapisz zamówienie lokalnie (tak samo jak po webhooks PayNow)
+        const order = {
+            order_uuid:       externalId,
+            p24_session_id:   externalId,
+            customer_name:    `${orderData.firstName} ${orderData.lastName}`,
+            customer_email:   orderData.email,
+            customer_phone:   orderData.phone || '',
+            customer_address: `${orderData.street}, ${orderData.postCode} ${orderData.city}`,
+            customer_notes:   orderData.notes || '',
+            cart_json:        JSON.stringify(orderData.cart || []),
+            total_amount:     amount,
+            status:           'paid_test',
+            payment_method:   'test',
+            paid_at:          new Date().toISOString(),
+            created_at:       new Date().toISOString()
+        };
+        saveOrder(order);
+        console.log(`🧪 TEST zamówienie: ${externalId} | ${orderData.email} | ${(amount/100).toFixed(2)} zł`);
+
+        // Wyślij do BaseLinker (identycznie jak webhook PayNow)
+        try {
+            const BL_URL    = process.env.BASELINKER_PROXY_URL || 'https://baselinker-proxy.007lukasz-m.workers.dev';
+            const BL_SOURCE = parseInt(process.env.ORDER_SOURCE_ID || '16611');
+
+            let statusId = 0;
+            try {
+                const sr = await fetch(BL_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ method: 'getOrderStatusList', parameters: {} }) });
+                const sd = await sr.json();
+                if (sd.status === 'SUCCESS' && sd.statuses?.length) {
+                    const f = sd.statuses.find(s => /nowe|oczekuj|new|pending/i.test(s.name));
+                    statusId = f ? f.id : sd.statuses[0].id;
+                }
+            } catch(e) { console.warn('Statusy BL:', e.message); }
+
+            const blPayload = {
+                order_status_id:       statusId,
+                custom_source_id:      BL_SOURCE,
+                date_add:              Math.floor(Date.now() / 1000),
+                currency:              'PLN',
+                payment_method:        '🧪 TEST (bez płatności)',
+                paid:                  1,
+                delivery_method:       'kurier',
+                delivery_price:        orderData.shipping || 0,
+                delivery_fullname:     `${orderData.firstName} ${orderData.lastName}`,
+                delivery_address:      orderData.street    || '',
+                delivery_city:         orderData.city      || '',
+                delivery_postcode:     orderData.postCode  || '',
+                delivery_country_code: 'PL',
+                email:                 orderData.email,
+                phone:                 orderData.phone     || '',
+                user_login:            orderData.email,
+                user_comments:         (orderData.notes || '') + (orderData.orderCode ? '\n\nKod konfiguracji:\n' + orderData.orderCode : ''),
+                admin_comments:        '🧪 ZAMÓWIENIE TESTOWE — bez płatności PayNow',
+                want_invoice:          orderData.wantInvoice ? 1 : 0,
+                invoice_fullname:      orderData.wantInvoice ? `${orderData.firstName} ${orderData.lastName}` : '',
+                invoice_company:       orderData.invCompany  || '',
+                invoice_nip:           orderData.invNip      || '',
+                invoice_address:       orderData.invAddr     || '',
+                invoice_postcode:      orderData.invPostCode || '',
+                invoice_country_code:  orderData.wantInvoice ? 'PL' : '',
+                products: (orderData.cart || []).map(i => ({
+                    name: i.name, sku: i.code, quantity: i.quantity,
+                    price_brutto: i.price, tax_rate: 23, weight: 2
+                }))
+            };
+
+            const blRes  = await fetch(BL_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ method: 'addOrder', parameters: blPayload }) });
+            const blData = await blRes.json();
+
+            if (blData.status === 'SUCCESS') {
+                console.log(`✅ BaseLinker TEST zamówienie #${blData.order_id}`);
+                order.baselinker_id = blData.order_id;
+                // Wyślij emaile
+                await sendEmails(order, 'TEST');
+                return res.json({ success: true, baselinker_id: blData.order_id, order_uuid: externalId });
+            } else {
+                console.error('❌ BaseLinker test:', blData.error_message);
+                return res.status(502).json({ error: 'BaseLinker: ' + blData.error_message });
+            }
+        } catch(e) {
+            console.error('❌ BaseLinker test wyjątek:', e.message);
+            return res.status(500).json({ error: e.message });
+        }
+
+    } catch(err) {
+        console.error('❌ test-order:', err.message);
+        return res.status(500).json({ error: err.message });
+    }
+});
+// ════════════════════════════════════════════════════════════
+//  🧪 KONIEC ENDPOINTU TESTOWEGO
+// ════════════════════════════════════════════════════════════
+
 // Tworzenie zamówienia
 app.post('/api/create-order', async (req, res) => {
     try {
