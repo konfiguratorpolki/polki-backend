@@ -221,7 +221,7 @@ app.post('/api/paynow-notify', async (req, res) => {
                     paid:                  1,
                     delivery_method:       'kurier',
                     delivery_price:        orderData.shipping || 0,
-                    discount_normal:       orderData.discount || 0,
+                    user_comments:         (orderData.notes||'') + (orderData.orderCode ? '\n\nKod konfiguracji:\n'+orderData.orderCode : '') + (orderData.discount ? '\n\nRabat: '+orderData.discount.toFixed(2)+' zł' : ''),
                     delivery_fullname:     `${orderData.firstName} ${orderData.lastName}`,
                     delivery_address:      orderData.street || '',
                     delivery_city:         orderData.city   || '',
@@ -230,7 +230,6 @@ app.post('/api/paynow-notify', async (req, res) => {
                     email:                 orderData.email,
                     phone:                 orderData.phone || '',
                     user_login:            orderData.email,
-                    user_comments:         (orderData.notes||'') + (orderData.orderCode ? '\n\nKod konfiguracji:\n'+orderData.orderCode : ''),
                     admin_comments:        'Zamówienie opłacone przez PayNow',
                     want_invoice:          orderData.wantInvoice ? 1 : 0,
                     invoice_fullname:      orderData.wantInvoice ? `${orderData.firstName} ${orderData.lastName}` : '',
@@ -239,10 +238,16 @@ app.post('/api/paynow-notify', async (req, res) => {
                     invoice_address:       orderData.invAddr     || '',
                     invoice_postcode:      orderData.invPostCode || '',
                     invoice_country_code:  orderData.wantInvoice ? 'PL' : '',
-                    products: (orderData.cart||[]).map(i => ({
-                        name: i.name, sku: i.code, quantity: i.quantity,
-                        price_brutto: i.price, tax_rate: 23, weight: 2
-                    }))
+                    products: [
+                        ...(orderData.cart||[]).map(i => ({
+                            name: i.name, sku: i.code, quantity: i.quantity,
+                            price_brutto: i.price, tax_rate: 23, weight: 2
+                        })),
+                        ...(orderData.discount > 0 ? [{
+                            name: 'Rabat', sku: 'rabat', quantity: 1,
+                            price_brutto: -parseFloat(orderData.discount), tax_rate: 23, weight: 0
+                        }] : [])
+                    ]
                 };
                 const blRes = await fetch(BL_URL, { method:'POST', headers:{'Content-Type':'application/json'},
                     body: JSON.stringify({ method:'addOrder', parameters: blPayload }) });
@@ -404,7 +409,7 @@ app.post('/api/test-order', async (req, res) => {
                 paid:                  0,
                 delivery_method:       'kurier',
                 delivery_price:        orderData.shipping || 0,
-                discount_normal:       orderData.discount || 0,
+                user_comments:         (orderData.notes || '') + (orderData.orderCode ? '\n\nKod konfiguracji:\n' + orderData.orderCode : '') + (orderData.discount ? '\n\nRabat: ' + parseFloat(orderData.discount).toFixed(2) + ' zł' : ''),
                 delivery_fullname:     `${orderData.firstName} ${orderData.lastName}`,
                 delivery_address:      orderData.street    || '',
                 delivery_city:         orderData.city      || '',
@@ -422,10 +427,16 @@ app.post('/api/test-order', async (req, res) => {
                 invoice_address:       orderData.invAddr     || '',
                 invoice_postcode:      orderData.invPostCode || '',
                 invoice_country_code:  orderData.wantInvoice ? 'PL' : '',
-                products: (orderData.cart || []).map(i => ({
-                    name: i.name, sku: i.code, quantity: i.quantity,
-                    price_brutto: i.price, tax_rate: 23, weight: 2
-                }))
+                products: [
+                    ...(orderData.cart || []).map(i => ({
+                        name: i.name, sku: i.code, quantity: i.quantity,
+                        price_brutto: i.price, tax_rate: 23, weight: 2
+                    })),
+                    ...(orderData.discount > 0 ? [{
+                        name: 'Rabat', sku: 'rabat', quantity: 1,
+                        price_brutto: -parseFloat(orderData.discount), tax_rate: 23, weight: 0
+                    }] : [])
+                ]
             };
 
             const blRes  = await fetch(BL_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' },
