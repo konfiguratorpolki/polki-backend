@@ -19,11 +19,8 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '5mb' }));
 
 // Zamówienia w pliku JSON
-const ORDERS_FILE      = path.join(__dirname, 'orders.json');
-const SNAPSHOTS_FILE   = path.join(__dirname, 'snapshots.json');
-// Folder na pliki PNG snapszotów (serwowane jako URL → BaseLinker auction_images)
-const SNAP_IMG_DIR     = path.join(__dirname, 'snapshot_imgs');
-if (!fs.existsSync(SNAP_IMG_DIR)) fs.mkdirSync(SNAP_IMG_DIR, { recursive: true });
+const ORDERS_FILE    = path.join(__dirname, 'orders.json');
+const SNAPSHOTS_FILE = path.join(__dirname, 'snapshots.json');
 
 const SELF_URL = process.env.BACKEND_URL || 'https://polki-backend-production.up.railway.app';
 
@@ -49,16 +46,55 @@ function loadSnapshots(orderId) {
     } catch(e) { return []; }
 }
 
-// Zapisz snapshot base64 jako plik PNG i zwróć publiczny URL
-function saveSnapshotImage(prefix, idx, base64DataUri) {
+// ── Snapshoty w pamięci (Map) — BaseLinker pobiera je w ciągu sekund od addOrder ──
+// Klucz: unikalna nazwa pliku, wartość: { buf: Buffer, expires: timestamp }
+const snapMemory = new Map();
+
+// Wyślij obraz do ImgBB → zwróć stały publiczny URL
+async function uploadToImgBB(base64DataUri, name) {
+    const key = process.env.IMGBB_API_KEY;
+    if (!key) return null;
     try {
-        if (!base64DataUri || !base64DataUri.startsWith('data:image/png;base64,')) return null;
         const b64 = base64DataUri.replace('data:image/png;base64,', '');
-        const filename = `${prefix}-${idx}.png`;
-        fs.writeFileSync(path.join(SNAP_IMG_DIR, filename), Buffer.from(b64, 'base64'));
-        return `${SELF_URL}/api/snapshot-img/${filename}`;
+        const body = new URLSearchParams();
+        body.append('key', key);
+        body.append('image', b64);
+        body.append('name', name);
+        const r = await fetch('https://api.imgbb.com/1/upload', { method: 'POST', body });
+        const d = await r.json();
+        if (d.success) {
+            console.log(`🖼️ ImgBB OK: ${d.data.url}`);
+            return d.data.url;
+        }
+        console.warn('⚠️ ImgBB error:', JSON.stringify(d.error));
+        return null;
     } catch(e) {
-        console.warn('⚠️ Nie udało się zapisać snapshota:', e.message);
+        console.warn('⚠️ ImgBB wyjątek:', e.message);
+        return null;
+    }
+}
+
+// Zapisz snapshot i zwróć publiczny URL
+// 1. Próbuje ImgBB (stały URL, dostępny dla BaseLinker)
+// 2. Fallback: pamięć RAM serwera (działa dopóki serwer nie zrestartuje)
+async function saveSnapshotImage(prefix, idx, base64DataUri) {
+    if (!base64DataUri || !base64DataUri.startsWith('data:image/png;base64,')) return null;
+    const name = `${prefix}-${idx}`;
+
+    // Próba 1: ImgBB
+    const imgbbUrl = await uploadToImgBB(base64DataUri, name);
+    if (imgbbUrl) return imgbbUrl;
+
+    // Próba 2: pamięć RAM
+    try {
+        const buf = Buffer.from(base64DataUri.replace('data:image/png;base64,', ''), 'base64');
+        const key = `${name}.png`;
+        snapMemory.set(key, { buf, expires: Date.now() + 2 * 60 * 60 * 1000 });
+        for (const [k, v] of snapMemory) { if (Date.now() > v.expires) snapMemory.delete(k); }
+        console.log(`🖼️ Snapshot RAM: ${key} (${(buf.length/1024).toFixed(1)} KB)`);
+        return `${SELF_URL}/api/snapshot-img/${key}`;
+    } catch(e) {
+        console.warn('⚠️ Snapshot RAM błąd:', e.message);
         return null;
     }
 }
@@ -100,12 +136,15 @@ app.get('/', (req, res) => res.json({ status: 'ok', mode: TEST_MODE ? 'test' : '
 
 // ── Serwowanie snapszotów PNG dla BaseLinker auction_images ──
 app.get('/api/snapshot-img/:filename', (req, res) => {
-    const filename = path.basename(req.params.filename); // blokuj path traversal
-    const filePath = path.join(SNAP_IMG_DIR, filename);
-    if (!fs.existsSync(filePath)) return res.status(404).send('Not found');
+    const key   = path.basename(req.params.filename); // blokuj path traversal
+    const entry = snapMemory.get(key);
+    if (!entry) {
+        console.warn(`⚠️ Snapshot nie znaleziony w pamięci: ${key}`);
+        return res.status(404).send('Not found');
+    }
     res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'public, max-age=86400');
-    res.sendFile(filePath);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(entry.buf);
 });
 
 // ════════════════════════════════════════════════════════════
@@ -222,11 +261,17 @@ app.post('/api/paynow-notify', async (req, res) => {
             };
             saveOrder(order);
 
-            // Zapisz snapshoty jako pliki PNG → publiczne URL-e dla BaseLinker auction_images
-            const cartWithImgUrls = (orderData.cart||[]).map((item, idx) => {
-                const imgUrl = saveSnapshotImage(externalId, idx, item.snapshot);
+            // Zapisz snapshoty w pamięci RAM i wygeneruj URL-e do admin_comments
+            const cartWithImgUrls = await Promise.all((orderData.cart||[]).map(async (item, idx) => {
+                const imgUrl = await saveSnapshotImage(externalId, idx, item.snapshot);
                 return { ...item, imgUrl };
-            });
+            }));
+
+            // Zbuduj linki do zdjęć dla admin_comments
+            const imgLinks = cartWithImgUrls
+                .filter(i => i.imgUrl)
+                .map((i, n) => `Zdjęcie półki ${n+1}: ${i.imgUrl}`)
+                .join('\n');
 
             // Wyślij do BaseLinker
             try {
@@ -253,7 +298,7 @@ app.post('/api/paynow-notify', async (req, res) => {
                     paid:                  1,
                     delivery_method:       'kurier',
                     delivery_price:        orderData.shipping || 0,
-                    user_comments:         (orderData.notes||'') + (orderData.orderCode ? '\n\nKod konfiguracji:\n'+orderData.orderCode : '') + (orderData.discount ? '\n\nRabat: '+orderData.discount.toFixed(2)+' zł' : ''),
+                    user_comments:         (orderData.notes||'') + (orderData.orderCode ? '\n\nKod konfiguracji:\n'+orderData.orderCode : '') + (orderData.discount ? '\n\nRabat: '+parseFloat(orderData.discount).toFixed(2)+' zł' : ''),
                     delivery_fullname:     `${orderData.firstName} ${orderData.lastName}`,
                     delivery_address:      orderData.street || '',
                     delivery_city:         orderData.city   || '',
@@ -262,7 +307,7 @@ app.post('/api/paynow-notify', async (req, res) => {
                     email:                 orderData.email,
                     phone:                 orderData.phone || '',
                     user_login:            orderData.email,
-                    admin_comments:        'Zamówienie opłacone przez PayNow',
+                    admin_comments:        'Zamówienie opłacone przez PayNow' + (imgLinks ? '\n\n📷 Podgląd 3D:\n' + imgLinks : ''),
                     want_invoice:          orderData.wantInvoice ? 1 : 0,
                     invoice_fullname:      orderData.wantInvoice ? `${orderData.firstName} ${orderData.lastName}` : '',
                     invoice_company:       orderData.invCompany  || '',
@@ -271,11 +316,10 @@ app.post('/api/paynow-notify', async (req, res) => {
                     invoice_postcode:      orderData.invPostCode || '',
                     invoice_country_code:  orderData.wantInvoice ? 'PL' : '',
                     products: [
-                        ...cartWithImgUrls.map(i => {
-                            const prod = { name: i.name, sku: i.code, quantity: i.quantity, price_brutto: i.price, tax_rate: 23, weight: 2 };
-                            if (i.imgUrl) prod.auction_images = [i.imgUrl];
-                            return prod;
-                        }),
+                        ...(orderData.cart||[]).map(i => ({
+                            name: i.name, sku: i.code, quantity: i.quantity,
+                            price_brutto: i.price, tax_rate: 23, weight: 2
+                        })),
                         ...(orderData.discount > 0 ? [{
                             name: 'Rabat', sku: 'rabat', quantity: 1,
                             price_brutto: -parseFloat(orderData.discount), tax_rate: 23, weight: 0
@@ -412,11 +456,16 @@ app.post('/api/test-order', async (req, res) => {
         saveOrder(order);
         console.log(`🧪 TEST zamówienie: ${externalId} | ${orderData.email} | ${(amount/100).toFixed(2)} zł`);
 
-        // Zapisz snapshoty jako pliki PNG → publiczne URL-e dla BaseLinker auction_images
-        const cartWithImgUrls = (orderData.cart||[]).map((item, idx) => {
-            const imgUrl = saveSnapshotImage(externalId, idx, item.snapshot);
+        // Zapisz snapshoty w pamięci RAM → URL-e do admin_comments
+        const cartWithImgUrls = await Promise.all((orderData.cart||[]).map(async (item, idx) => {
+            const imgUrl = await saveSnapshotImage(externalId, idx, item.snapshot);
             return { ...item, imgUrl };
-        });
+        }));
+
+        const imgLinks = cartWithImgUrls
+            .filter(i => i.imgUrl)
+            .map((i, n) => `Zdjęcie półki ${n+1}: ${i.imgUrl}`)
+            .join('\n');
 
         // Wyślij do BaseLinker (identycznie jak webhook PayNow)
         try {
@@ -452,7 +501,7 @@ app.post('/api/test-order', async (req, res) => {
                 email:                 orderData.email,
                 phone:                 orderData.phone     || '',
                 user_login:            orderData.email,
-                admin_comments:        '🧪 ZAMÓWIENIE TESTOWE — bez płatności PayNow',
+                admin_comments:        '🧪 ZAMÓWIENIE TESTOWE — bez płatności PayNow' + (imgLinks ? '\n\n📷 Podgląd 3D:\n' + imgLinks : ''),
                 want_invoice:          orderData.wantInvoice ? 1 : 0,
                 invoice_fullname:      orderData.wantInvoice ? `${orderData.firstName} ${orderData.lastName}` : '',
                 invoice_company:       orderData.invCompany  || '',
@@ -461,11 +510,10 @@ app.post('/api/test-order', async (req, res) => {
                 invoice_postcode:      orderData.invPostCode || '',
                 invoice_country_code:  orderData.wantInvoice ? 'PL' : '',
                 products: [
-                    ...cartWithImgUrls.map(i => {
-                        const prod = { name: i.name, sku: i.code, quantity: i.quantity, price_brutto: i.price, tax_rate: 23, weight: 2 };
-                        if (i.imgUrl) prod.auction_images = [i.imgUrl];
-                        return prod;
-                    }),
+                    ...(orderData.cart||[]).map(i => ({
+                        name: i.name, sku: i.code, quantity: i.quantity,
+                        price_brutto: i.price, tax_rate: 23, weight: 2
+                    })),
                     ...(orderData.discount > 0 ? [{
                         name: 'Rabat', sku: 'rabat', quantity: 1,
                         price_brutto: -parseFloat(orderData.discount), tax_rate: 23, weight: 0
