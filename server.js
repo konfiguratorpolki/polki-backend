@@ -74,25 +74,59 @@ async function uploadToImgBB(base64DataUri, name) {
     }
 }
 
+// Upload zdjęcia do GitHub repo → zwróć trwały publiczny URL
+async function uploadToGitHub(base64DataUri, filename) {
+    const token = process.env.GITHUB_TOKEN;
+    const repo  = process.env.GITHUB_REPO; // np. "konfiguratorpolki/snapshots"
+    if (!token || !repo) return null;
+    try {
+        const b64 = base64DataUri.replace('data:image/png;base64,', '');
+        const url = `https://api.github.com/repos/${repo}/contents/${filename}`;
+        const r = await fetch(url, {
+            method: 'PUT',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                'User-Agent': 'polki-backend'
+            },
+            body: JSON.stringify({
+                message: `snapshot ${filename}`,
+                content: b64
+            })
+        });
+        const d = await r.json();
+        if (r.ok && d.content?.download_url) {
+            // Użyj raw.githubusercontent.com — bezpośredni publiczny URL
+            const rawUrl = `https://raw.githubusercontent.com/${repo}/main/${filename}`;
+            console.log(`🖼️ GitHub OK: ${rawUrl}`);
+            return rawUrl;
+        }
+        console.warn('⚠️ GitHub upload błąd:', JSON.stringify(d.message || d));
+        return null;
+    } catch(e) {
+        console.warn('⚠️ GitHub upload wyjątek:', e.message);
+        return null;
+    }
+}
+
 // Zapisz snapshot i zwróć publiczny URL
-// 1. Próbuje ImgBB (stały URL, dostępny dla BaseLinker)
+// 1. Próbuje GitHub (trwały URL, dostępny zawsze)
 // 2. Fallback: pamięć RAM serwera (działa dopóki serwer nie zrestartuje)
 async function saveSnapshotImage(prefix, idx, base64DataUri) {
     if (!base64DataUri || !base64DataUri.startsWith('data:image/png;base64,')) return null;
-    const name = `${prefix}-${idx}`;
+    const filename = `${prefix}-${idx}.png`;
 
-    // Próba 1: ImgBB
-    const imgbbUrl = await uploadToImgBB(base64DataUri, name);
-    if (imgbbUrl) return imgbbUrl;
+    // Próba 1: GitHub
+    const githubUrl = await uploadToGitHub(base64DataUri, filename);
+    if (githubUrl) return githubUrl;
 
-    // Próba 2: pamięć RAM
+    // Próba 2: pamięć RAM (fallback gdy brak tokena)
     try {
         const buf = Buffer.from(base64DataUri.replace('data:image/png;base64,', ''), 'base64');
-        const key = `${name}.png`;
-        snapMemory.set(key, { buf, expires: Date.now() + 2 * 60 * 60 * 1000 });
+        snapMemory.set(filename, { buf, expires: Date.now() + 2 * 60 * 60 * 1000 });
         for (const [k, v] of snapMemory) { if (Date.now() > v.expires) snapMemory.delete(k); }
-        console.log(`🖼️ Snapshot RAM: ${key} (${(buf.length/1024).toFixed(1)} KB)`);
-        return `${SELF_URL}/api/snapshot-img/${key}`;
+        console.log(`🖼️ Snapshot RAM (fallback): ${filename} (${(buf.length/1024).toFixed(1)} KB)`);
+        return `${SELF_URL}/api/snapshot-img/${filename}`;
     } catch(e) {
         console.warn('⚠️ Snapshot RAM błąd:', e.message);
         return null;
@@ -332,6 +366,9 @@ app.post('/api/paynow-notify', async (req, res) => {
                 if (blData.status === 'SUCCESS') {
                     console.log(`✅ BaseLinker zamówienie #${blData.order_id} dla PayNow ${externalId}`);
                     order.baselinker_id = blData.order_id;
+                    // Zapisz snapshoty → /api/order-snapshots (dla zamowienie.html)
+                    const snapsToSave = (orderData.cart||[]).map(i=>({code:i.code,snapshot:i.snapshot||''})).filter(i=>i.snapshot);
+                    if (snapsToSave.length > 0) saveSnapshots(String(blData.order_id), snapsToSave);
                 } else {
                     console.error('❌ BaseLinker:', blData.error_message);
                 }
@@ -528,6 +565,9 @@ app.post('/api/test-order', async (req, res) => {
             if (blData.status === 'SUCCESS') {
                 console.log(`✅ BaseLinker TEST zamówienie #${blData.order_id}`);
                 order.baselinker_id = blData.order_id;
+                // Zapisz snapshoty → /api/order-snapshots (dla zamowienie.html)
+                const snapsToSave = (orderData.cart||[]).map(i=>({code:i.code,snapshot:i.snapshot||''})).filter(i=>i.snapshot);
+                if (snapsToSave.length > 0) saveSnapshots(String(blData.order_id), snapsToSave);
                 // Wyślij emaile
                 await sendEmails(order, 'TEST');
                 return res.json({ success: true, baselinker_id: blData.order_id, order_uuid: externalId });
@@ -704,21 +744,47 @@ async function sendEmails(order, p24Id='TEST') {
 
     // Email do klienta
     try {
+        const blId = order.baselinker_id || null;
+        const orderLink = blId
+            ? `https://konfiguratorpolki.github.io/zamowienia/zamowienie.html?id=${blId}`
+            : null;
+
+        const orderLinkHtml = orderLink
+            ? `<div style="margin:24px 0;text-align:center">
+                 <a href="${orderLink}"
+                    style="display:inline-block;padding:14px 32px;background:#16a34a;color:#fff;text-decoration:none;border-radius:10px;font-size:15px;font-weight:600;">
+                   📦 Sprawdź status zamówienia
+                 </a>
+               </div>
+               <p style="color:#6b7280;font-size:13px;text-align:center">
+                 lub wklej ten link w przeglądarce:<br>
+                 <a href="${orderLink}" style="color:#16a34a">${orderLink}</a>
+               </p>`
+            : '';
+
         await fetch('https://api.resend.com/emails', {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 from: 'Konfigurator Półek <onboarding@resend.dev>',
                 to: [order.customer_email],
-                subject: `Potwierdzenie zamówienia #${order.order_uuid.slice(0,8)}`,
-                html: `<h2 style="color:green">Dziękujemy! 🎉</h2>
-                       <p>Cześć <b>${order.customer_name}</b>,<br>
+                subject: `Potwierdzenie zamówienia #${blId || order.order_uuid.slice(0,8)}`,
+                html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
+                       <h2 style="color:#16a34a">Dziękujemy za zamówienie! 🎉</h2>
+                       <p>Cześć <b>${order.customer_name}</b>,<br><br>
+                       Twoje zamówienie zostało przyjęte i trafiło do realizacji.<br>
                        Realizacja: <b>3–5 dni roboczych</b><br>
                        Kwota: <b>${total} zł</b><br>
-                       Adres: ${order.customer_address}</p>`
+                       Adres dostawy: ${order.customer_address}</p>
+                       ${orderLinkHtml}
+                       <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
+                       <p style="color:#6b7280;font-size:13px">
+                         Na stronie zamówienia zobaczysz podgląd swojej półki, status realizacji i numer przesyłki.
+                       </p>
+                       </div>`
             })
         });
-        console.log('📧 Email do klienta wysłany');
+        console.log('📧 Email do klienta wysłany (link zamówienia:', orderLink || 'brak bl_id', ')');
     } catch(e) { console.log('❌ Email klient wyjątek:', e.message); }
 }
 
