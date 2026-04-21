@@ -692,8 +692,13 @@ async function sendEmails(order, p24Id='TEST') {
     if (!GMAIL_PASS) { console.log('⚠️ Brak GMAIL_APP_PASSWORD — email pominięty'); return; }
 
     const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: { user: GMAIL_USER, pass: GMAIL_PASS }
+        host: 'smtp.gmail.com',
+        port: 587,
+        secure: false,
+        auth: { user: GMAIL_USER, pass: GMAIL_PASS },
+        connectionTimeout: 10000,
+        greetingTimeout: 10000,
+        socketTimeout: 15000
     });
 
     const cart  = JSON.parse(order.cart_json || '[]');
