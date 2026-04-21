@@ -686,67 +686,51 @@ app.post('/api/p24-notify', async (req, res) => {
     } catch(e) { return res.status(500).send('Error'); }
 });
 
-// Wysyłka emaili przez Gmail SMTP (nodemailer)
+// Wysyłka emaili przez Resend API
 async function sendEmails(order, p24Id='TEST') {
-    if (!GMAIL_PASS) { console.log('⚠️ Brak GMAIL_APP_PASSWORD — email pominięty'); return; }
-
-    const transporter = nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 465,
-        secure: true,
-        auth: { user: GMAIL_USER, pass: GMAIL_PASS },
-        connectionTimeout: 10000,
-        greetingTimeout: 10000,
-        socketTimeout: 15000
-    });
-
+    if (!RESEND_KEY) { console.log('⚠️ Brak RESEND_API_KEY — email pominięty'); return; }
     const cart  = JSON.parse(order.cart_json || '[]');
     const total = ((order.total_amount||0)/100).toFixed(2);
 
-    // Buduj HTML i załączniki
-    const attachments = [];
-    const itemsHtml = cart.map((i,n) => {
-        let imgHtml = '';
-        if (i.snapshot && i.snapshot.startsWith('data:image/png;base64,')) {
-            const cid = `polka${n+1}`;
-            attachments.push({ filename: `polka-${n+1}.png`, content: i.snapshot.replace('data:image/png;base64,',''), encoding: 'base64', cid });
-            imgHtml = `<img src="cid:${cid}" width="120" height="120" style="object-fit:contain;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;" />`;
-        }
-        return `<tr>
-            <td style="padding:12px;vertical-align:middle">${imgHtml}</td>
-            <td style="padding:12px;vertical-align:middle">
-                <b>${i.name}</b> x${i.quantity}<br>
-                <small style="color:#6b7280">${i.summary || ''}</small><br>
-                <small style="color:#6b7280">Boki: ${i.sideColor || '-'} | Półki: ${i.shelfColor || '-'}</small>
-            </td>
-            <td style="padding:12px;vertical-align:middle;text-align:right"><b>${(i.price*i.quantity).toFixed(2)} zł</b></td>
-        </tr>`;
-    }).join('');
+    const itemsHtml = cart.map((i) => `<tr>
+        <td style="padding:12px;vertical-align:middle">
+            <b>${i.name}</b> x${i.quantity}<br>
+            <small style="color:#6b7280">${i.summary || ''}</small><br>
+            <small style="color:#6b7280">Boki: ${i.sideColor || '-'} | Półki: ${i.shelfColor || '-'}</small>
+        </td>
+        <td style="padding:12px;vertical-align:middle;text-align:right"><b>${(i.price*i.quantity).toFixed(2)} zł</b></td>
+    </tr>`).join('');
 
     // Email do właściciela
     try {
-        await transporter.sendMail({
-            from: `"Konfigurator Półek" <${GMAIL_USER}>`,
-            to: MAIL_TO,
-            subject: `🛒 Nowe zamówienie #${order.order_uuid.slice(0,8)} — ${total} zł`,
-            html: `<div style="font-family:sans-serif;max-width:600px">
-                   <h2 style="color:#16a34a">🛒 Nowe zamówienie!</h2>
-                   <p><b>Klient:</b> ${order.customer_name}<br>
-                   <b>Email:</b> ${order.customer_email}<br>
-                   <b>Telefon:</b> ${order.customer_phone}<br>
-                   <b>Adres:</b> ${order.customer_address}<br>
-                   <b>Uwagi:</b> ${order.customer_notes||'-'}</p>
-                   <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px">
-                   ${itemsHtml}
-                   <tr style="background:#f9fafb">
-                       <td colspan="2" style="padding:12px;text-align:right"><b>Łącznie:</b></td>
-                       <td style="padding:12px;text-align:right"><b style="color:#16a34a;font-size:18px">${total} zł</b></td>
-                   </tr>
-                   </table></div>`,
-            attachments
+        const r = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                from: 'Konfigurator Półek <zamowienia@regaliki.pl>',
+                reply_to: 'regaliki.pl@gmail.com',
+                to: [MAIL_TO],
+                subject: `🛒 Nowe zamówienie #${order.order_uuid.slice(0,8)} — ${total} zł`,
+                html: `<div style="font-family:sans-serif;max-width:600px">
+                       <h2 style="color:#16a34a">🛒 Nowe zamówienie!</h2>
+                       <p><b>Klient:</b> ${order.customer_name}<br>
+                       <b>Email:</b> ${order.customer_email}<br>
+                       <b>Telefon:</b> ${order.customer_phone}<br>
+                       <b>Adres:</b> ${order.customer_address}<br>
+                       <b>Uwagi:</b> ${order.customer_notes||'-'}</p>
+                       <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb">
+                       ${itemsHtml}
+                       <tr style="background:#f9fafb">
+                           <td style="padding:12px;text-align:right"><b>Łącznie:</b></td>
+                           <td style="padding:12px;text-align:right"><b style="color:#16a34a;font-size:18px">${total} zł</b></td>
+                       </tr>
+                       </table></div>`
+            })
         });
-        console.log('📧 Email do właściciela wysłany');
-    } catch(e) { console.log('❌ Email właściciel błąd:', e.message); }
+        const d = await r.json();
+        if (r.ok) console.log('📧 Email do właściciela wysłany:', d.id);
+        else console.log('❌ Email właściciel błąd:', JSON.stringify(d));
+    } catch(e) { console.log('❌ Email właściciel wyjątek:', e.message); }
 
     // Email do klienta
     try {
@@ -761,30 +745,33 @@ async function sendEmails(order, p24Id='TEST') {
                <p style="color:#6b7280;font-size:13px;text-align:center">
                  lub wklej ten link w przeglądarce:<br>
                  <a href="${orderLink}" style="color:#16a34a">${orderLink}</a>
-               </p>`
-            : '';
+               </p>` : '';
 
-        await transporter.sendMail({
-            from: `"Nowy Wymiar" <${GMAIL_USER}>`,
-            to: order.customer_email,
-            replyTo: GMAIL_USER,
-            subject: `Potwierdzenie zamówienia #${blId || order.order_uuid.slice(0,8)}`,
-            html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
-                   <h2 style="color:#16a34a">Dziękujemy za zamówienie! 🎉</h2>
-                   <p>Cześć <b>${order.customer_name}</b>,<br><br>
-                   Twoje zamówienie zostało przyjęte i trafiło do realizacji.<br>
-                   Realizacja: <b>3–5 dni roboczych</b><br>
-                   Kwota: <b>${total} zł</b><br>
-                   Adres dostawy: ${order.customer_address}</p>
-                   ${orderLinkHtml}
-                   <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
-                   <p style="color:#6b7280;font-size:13px">
-                     Masz pytania? Napisz na ${GMAIL_USER}
-                   </p>
-                   </div>`
+        const r2 = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                from: 'Nowy Wymiar <zamowienia@regaliki.pl>',
+                reply_to: 'regaliki.pl@gmail.com',
+                to: [order.customer_email],
+                subject: `Potwierdzenie zamówienia #${blId || order.order_uuid.slice(0,8)}`,
+                html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
+                       <h2 style="color:#16a34a">Dziękujemy za zamówienie! 🎉</h2>
+                       <p>Cześć <b>${order.customer_name}</b>,<br><br>
+                       Twoje zamówienie zostało przyjęte i trafiło do realizacji.<br>
+                       Realizacja: <b>3–5 dni roboczych</b><br>
+                       Kwota: <b>${total} zł</b><br>
+                       Adres dostawy: ${order.customer_address}</p>
+                       ${orderLinkHtml}
+                       <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
+                       <p style="color:#6b7280;font-size:13px">Masz pytania? Napisz na regaliki.pl@gmail.com</p>
+                       </div>`
+            })
         });
-        console.log('📧 Email do klienta wysłany:', order.customer_email);
-    } catch(e) { console.log('❌ Email klient błąd:', e.message); }
+        const d2 = await r2.json();
+        if (r2.ok) console.log('📧 Email do klienta wysłany:', d2.id);
+        else console.log('❌ Email klient błąd:', JSON.stringify(d2));
+    } catch(e) { console.log('❌ Email klient wyjątek:', e.message); }
 }
 
 const BASELINKER_TOKEN = process.env.BASELINKER_TOKEN || '';
