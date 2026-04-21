@@ -350,9 +350,10 @@ app.post('/api/paynow-notify', async (req, res) => {
                     invoice_postcode:      orderData.invPostCode || '',
                     invoice_country_code:  orderData.wantInvoice ? 'PL' : '',
                     products: [
-                        ...(orderData.cart||[]).map(i => ({
+                        ...cartWithImgUrls.map(i => ({
                             name: i.name, sku: i.code, quantity: i.quantity,
-                            price_brutto: i.price, tax_rate: 23, weight: 2
+                            price_brutto: i.price, tax_rate: 23, weight: 2,
+                            ...(i.imgUrl ? { auction_images: [i.imgUrl] } : {})
                         })),
                         ...(orderData.discount > 0 ? [{
                             name: 'Rabat', sku: 'rabat', quantity: 1,
@@ -547,9 +548,10 @@ app.post('/api/test-order', async (req, res) => {
                 invoice_postcode:      orderData.invPostCode || '',
                 invoice_country_code:  orderData.wantInvoice ? 'PL' : '',
                 products: [
-                    ...(orderData.cart||[]).map(i => ({
+                    ...cartWithImgUrls.map(i => ({
                         name: i.name, sku: i.code, quantity: i.quantity,
-                        price_brutto: i.price, tax_rate: 23, weight: 2
+                        price_brutto: i.price, tax_rate: 23, weight: 2,
+                        ...(i.imgUrl ? { auction_images: [i.imgUrl] } : {})
                     })),
                     ...(orderData.discount > 0 ? [{
                         name: 'Rabat', sku: 'rabat', quantity: 1,
@@ -713,7 +715,7 @@ async function sendEmails(order, p24Id='TEST') {
     // Email do właściciela
     try {
         const emailPayload = {
-            from: 'Konfigurator Półek <onboarding@resend.dev>',
+            from: 'Konfigurator Półek <zamowienia@regaliki.pl>',
             to: [MAIL_TO || order.customer_email],
             subject: `🛒 Nowe zamówienie #${order.order_uuid.slice(0,8)} — ${total} zł`,
             html: `<div style="font-family:sans-serif;max-width:600px">
@@ -746,7 +748,7 @@ async function sendEmails(order, p24Id='TEST') {
     try {
         const blId = order.baselinker_id || null;
         const orderLink = blId
-            ? `https://konfiguratorpolki.github.io/zamowienia/zamowienie.html?id=${blId}`
+            ? `https://regaliki.pl/zamowienia/zamowienie.html?id=${blId}`
             : null;
 
         const orderLinkHtml = orderLink
@@ -766,7 +768,7 @@ async function sendEmails(order, p24Id='TEST') {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                from: 'Konfigurator Półek <onboarding@resend.dev>',
+                from: 'Konfigurator Półek <zamowienia@regaliki.pl>',
                 to: [order.customer_email],
                 subject: `Potwierdzenie zamówienia #${blId || order.order_uuid.slice(0,8)}`,
                 html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
