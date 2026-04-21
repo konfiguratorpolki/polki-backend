@@ -144,9 +144,8 @@ const P24_SECRET   = process.env.P24_SECRET  || '';
 const SITE_URL     = process.env.SITE_URL    || '';
 const TEST_MODE    = (P24_MERCHANT === 0);
 const ADMIN_PASS   = process.env.ADMIN_PASSWORD || 'polki2024';
-const GMAIL_USER   = process.env.SMTP_USER || process.env.GMAIL_USER || 'regaliki.pl@gmail.com';
-const GMAIL_PASS   = process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || '';
-const MAIL_TO      = process.env.MAIL_TO || GMAIL_USER;
+const RESEND_KEY   = process.env.RESEND_API_KEY || '';
+const MAIL_TO      = process.env.MAIL_TO || 'regaliki.pl@gmail.com';
 
 // ── PayNow (mBank) ──────────────────────────────────────────
 const PAYNOW_API_KEY       = process.env.PAYNOW_API_KEY       || '';
@@ -158,8 +157,8 @@ const PAYNOW_API_URL       = PAYNOW_ENV === 'production'
 // Tymczasowy store oczekujących płatności (w pamięci serwera)
 const pendingPaynow = new Map();
 
-console.log('📧 GMAIL_USER:', GMAIL_USER);
-console.log('📧 GMAIL_PASS:', GMAIL_PASS ? 'ustawione' : 'BRAK');
+console.log('📧 RESEND_KEY:', RESEND_KEY ? `ustawiony (${RESEND_KEY.slice(0,8)}...)` : 'BRAK');
+console.log('📧 MAIL_TO:', MAIL_TO);
 
 function p24Sign(data) {
     return crypto.createHash('sha384').update(JSON.stringify(data)).digest('hex');
@@ -693,8 +692,8 @@ async function sendEmails(order, p24Id='TEST') {
 
     const transporter = nodemailer.createTransport({
         host: 'smtp.gmail.com',
-        port: 587,
-        secure: false,
+        port: 465,
+        secure: true,
         auth: { user: GMAIL_USER, pass: GMAIL_PASS },
         connectionTimeout: 10000,
         greetingTimeout: 10000,
