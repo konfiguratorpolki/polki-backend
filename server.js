@@ -144,8 +144,8 @@ const P24_SECRET   = process.env.P24_SECRET  || '';
 const SITE_URL     = process.env.SITE_URL    || '';
 const TEST_MODE    = (P24_MERCHANT === 0);
 const ADMIN_PASS   = process.env.ADMIN_PASSWORD || 'polki2024';
-const GMAIL_USER   = process.env.GMAIL_USER || 'regaliki.pl@gmail.com';
-const GMAIL_PASS   = process.env.GMAIL_APP_PASSWORD || '';
+const GMAIL_USER   = process.env.SMTP_USER || process.env.GMAIL_USER || 'regaliki.pl@gmail.com';
+const GMAIL_PASS   = process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || '';
 const MAIL_TO      = process.env.MAIL_TO || GMAIL_USER;
 
 // ── PayNow (mBank) ──────────────────────────────────────────
