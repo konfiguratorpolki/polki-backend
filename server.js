@@ -1,8 +1,9 @@
-const express = require('express');
-const crypto  = require('crypto');
-const fs      = require('fs');
-const path    = require('path');
-const rateLimit = require('express-rate-limit');
+const express    = require('express');
+const crypto     = require('crypto');
+const fs         = require('fs');
+const path       = require('path');
+const rateLimit  = require('express-rate-limit');
+const nodemailer = require('nodemailer');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -143,8 +144,9 @@ const P24_SECRET   = process.env.P24_SECRET  || '';
 const SITE_URL     = process.env.SITE_URL    || '';
 const TEST_MODE    = (P24_MERCHANT === 0);
 const ADMIN_PASS   = process.env.ADMIN_PASSWORD || 'polki2024';
-const RESEND_KEY   = process.env.RESEND_API_KEY || '';
-const MAIL_TO      = process.env.MAIL_TO || '';
+const GMAIL_USER   = process.env.GMAIL_USER || 'regaliki.pl@gmail.com';
+const GMAIL_PASS   = process.env.GMAIL_APP_PASSWORD || '';
+const MAIL_TO      = process.env.MAIL_TO || GMAIL_USER;
 
 // ── PayNow (mBank) ──────────────────────────────────────────
 const PAYNOW_API_KEY       = process.env.PAYNOW_API_KEY       || '';
@@ -156,8 +158,8 @@ const PAYNOW_API_URL       = PAYNOW_ENV === 'production'
 // Tymczasowy store oczekujących płatności (w pamięci serwera)
 const pendingPaynow = new Map();
 
-console.log('📧 RESEND_KEY:', RESEND_KEY ? `ustawiony (${RESEND_KEY.slice(0,8)}...)` : 'BRAK');
-console.log('📧 MAIL_TO:', MAIL_TO || 'BRAK');
+console.log('📧 GMAIL_USER:', GMAIL_USER);
+console.log('📧 GMAIL_PASS:', GMAIL_PASS ? 'ustawione' : 'BRAK');
 
 function p24Sign(data) {
     return crypto.createHash('sha384').update(JSON.stringify(data)).digest('hex');
@@ -685,9 +687,15 @@ app.post('/api/p24-notify', async (req, res) => {
     } catch(e) { return res.status(500).send('Error'); }
 });
 
-// Wysyłka emaili przez Resend API
+// Wysyłka emaili przez Gmail SMTP (nodemailer)
 async function sendEmails(order, p24Id='TEST') {
-    if (!RESEND_KEY) { console.log('⚠️ Brak RESEND_API_KEY — email pominięty'); return; }
+    if (!GMAIL_PASS) { console.log('⚠️ Brak GMAIL_APP_PASSWORD — email pominięty'); return; }
+
+    const transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: { user: GMAIL_USER, pass: GMAIL_PASS }
+    });
+
     const cart  = JSON.parse(order.cart_json || '[]');
     const total = ((order.total_amount||0)/100).toFixed(2);
 
@@ -696,10 +704,9 @@ async function sendEmails(order, p24Id='TEST') {
     const itemsHtml = cart.map((i,n) => {
         let imgHtml = '';
         if (i.snapshot && i.snapshot.startsWith('data:image/png;base64,')) {
-            const b64 = i.snapshot.replace('data:image/png;base64,', '');
-            const filename = `polka-${n+1}.png`;
-            attachments.push({ filename, content: b64 });
-            imgHtml = `<img src="${i.snapshot}" width="120" height="120" style="object-fit:contain;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;" />`;
+            const cid = `polka${n+1}`;
+            attachments.push({ filename: `polka-${n+1}.png`, content: i.snapshot.replace('data:image/png;base64,',''), encoding: 'base64', cid });
+            imgHtml = `<img src="cid:${cid}" width="120" height="120" style="object-fit:contain;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;" />`;
         }
         return `<tr>
             <td style="padding:12px;vertical-align:middle">${imgHtml}</td>
@@ -714,9 +721,9 @@ async function sendEmails(order, p24Id='TEST') {
 
     // Email do właściciela
     try {
-        const emailPayload = {
-            from: 'Konfigurator Półek <zamowienia@regaliki.pl>',
-            to: [MAIL_TO || order.customer_email],
+        await transporter.sendMail({
+            from: `"Konfigurator Półek" <${GMAIL_USER}>`,
+            to: MAIL_TO,
             subject: `🛒 Nowe zamówienie #${order.order_uuid.slice(0,8)} — ${total} zł`,
             html: `<div style="font-family:sans-serif;max-width:600px">
                    <h2 style="color:#16a34a">🛒 Nowe zamówienie!</h2>
@@ -732,29 +739,18 @@ async function sendEmails(order, p24Id='TEST') {
                        <td style="padding:12px;text-align:right"><b style="color:#16a34a;font-size:18px">${total} zł</b></td>
                    </tr>
                    </table></div>`,
-        };
-        if (attachments.length > 0) emailPayload.attachments = attachments;
-        const r = await fetch('https://api.resend.com/emails', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify(emailPayload)
+            attachments
         });
-        const data = await r.json();
-        if (r.ok) console.log('📧 Email do właściciela wysłany:', data.id);
-        else console.log('❌ Email błąd:', JSON.stringify(data));
-    } catch(e) { console.log('❌ Email wyjątek:', e.message); }
+        console.log('📧 Email do właściciela wysłany');
+    } catch(e) { console.log('❌ Email właściciel błąd:', e.message); }
 
     // Email do klienta
     try {
         const blId = order.baselinker_id || null;
-        const orderLink = blId
-            ? `https://regaliki.pl/zamowienia/zamowienie.html?id=${blId}`
-            : null;
-
+        const orderLink = blId ? `https://regaliki.pl/zamowienia/zamowienie.html?id=${blId}` : null;
         const orderLinkHtml = orderLink
             ? `<div style="margin:24px 0;text-align:center">
-                 <a href="${orderLink}"
-                    style="display:inline-block;padding:14px 32px;background:#16a34a;color:#fff;text-decoration:none;border-radius:10px;font-size:15px;font-weight:600;">
+                 <a href="${orderLink}" style="display:inline-block;padding:14px 32px;background:#16a34a;color:#fff;text-decoration:none;border-radius:10px;font-size:15px;font-weight:600;">
                    📦 Sprawdź status zamówienia
                  </a>
                </div>
@@ -764,30 +760,27 @@ async function sendEmails(order, p24Id='TEST') {
                </p>`
             : '';
 
-        await fetch('https://api.resend.com/emails', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                from: 'Konfigurator Półek <zamowienia@regaliki.pl>',
-                to: [order.customer_email],
-                subject: `Potwierdzenie zamówienia #${blId || order.order_uuid.slice(0,8)}`,
-                html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
-                       <h2 style="color:#16a34a">Dziękujemy za zamówienie! 🎉</h2>
-                       <p>Cześć <b>${order.customer_name}</b>,<br><br>
-                       Twoje zamówienie zostało przyjęte i trafiło do realizacji.<br>
-                       Realizacja: <b>3–5 dni roboczych</b><br>
-                       Kwota: <b>${total} zł</b><br>
-                       Adres dostawy: ${order.customer_address}</p>
-                       ${orderLinkHtml}
-                       <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
-                       <p style="color:#6b7280;font-size:13px">
-                         Na stronie zamówienia zobaczysz podgląd swojej półki, status realizacji i numer przesyłki.
-                       </p>
-                       </div>`
-            })
+        await transporter.sendMail({
+            from: `"Nowy Wymiar" <${GMAIL_USER}>`,
+            to: order.customer_email,
+            replyTo: GMAIL_USER,
+            subject: `Potwierdzenie zamówienia #${blId || order.order_uuid.slice(0,8)}`,
+            html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
+                   <h2 style="color:#16a34a">Dziękujemy za zamówienie! 🎉</h2>
+                   <p>Cześć <b>${order.customer_name}</b>,<br><br>
+                   Twoje zamówienie zostało przyjęte i trafiło do realizacji.<br>
+                   Realizacja: <b>3–5 dni roboczych</b><br>
+                   Kwota: <b>${total} zł</b><br>
+                   Adres dostawy: ${order.customer_address}</p>
+                   ${orderLinkHtml}
+                   <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
+                   <p style="color:#6b7280;font-size:13px">
+                     Masz pytania? Napisz na ${GMAIL_USER}
+                   </p>
+                   </div>`
         });
-        console.log('📧 Email do klienta wysłany (link zamówienia:', orderLink || 'brak bl_id', ')');
-    } catch(e) { console.log('❌ Email klient wyjątek:', e.message); }
+        console.log('📧 Email do klienta wysłany:', order.customer_email);
+    } catch(e) { console.log('❌ Email klient błąd:', e.message); }
 }
 
 const BASELINKER_TOKEN = process.env.BASELINKER_TOKEN || '';
@@ -858,6 +851,28 @@ app.get('/api/invoice-pdf', async (req, res) => {
 //  Snapshoty 3D dla strony zamówienia
 //  GET /api/order-snapshots?bl_order_id=123
 // ════════════════════════════════════════════════════════════
+// Test wysyłki emaila — GET /api/test-email?to=adres@gmail.com
+app.get('/api/test-email', async (req, res) => {
+    const to = req.query.to || GMAIL_USER;
+    if (!GMAIL_PASS) return res.json({ ok: false, error: 'Brak GMAIL_APP_PASSWORD' });
+    try {
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: { user: GMAIL_USER, pass: GMAIL_PASS }
+        });
+        await transporter.verify();
+        await transporter.sendMail({
+            from: `"Test Regaliki" <${GMAIL_USER}>`,
+            to,
+            subject: 'Test emaila z Railway',
+            text: 'Działa! Gmail SMTP działa poprawnie.'
+        });
+        res.json({ ok: true, from: GMAIL_USER, to });
+    } catch(e) {
+        res.json({ ok: false, error: e.message });
+    }
+});
+
 app.get('/api/order-snapshots', (req, res) => {
     try {
         const { bl_order_id } = req.query;
