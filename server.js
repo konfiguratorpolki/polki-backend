@@ -1006,6 +1006,46 @@ app.get('/api/invoice-pdf', async (req, res) => {
 //  GET /api/order-snapshots?bl_order_id=123
 // ════════════════════════════════════════════════════════════
 // Test wysyłki emaila — GET /api/test-email?to=adres@gmail.com
+// Diagnostyka BaseLinker API — GET /api/test-bl
+app.get('/api/test-bl', async (req, res) => {
+    if (!BASELINKER_TOKEN) return res.json({ ok: false, error: 'Brak BASELINKER_TOKEN' });
+    try {
+        // Test 1: pobierz statusy
+        const r1 = await fetch(BL_API, {
+            method: 'POST',
+            headers: { 'X-BLToken': BASELINKER_TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `method=getOrderStatusList&parameters={}`
+        });
+        const statuses = await r1.json();
+
+        // Test 2: pobierz ostatnie zamówienia bez filtra
+        const r2 = await fetch(BL_API, {
+            method: 'POST',
+            headers: { 'X-BLToken': BASELINKER_TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `method=getOrders&parameters=${encodeURIComponent(JSON.stringify({ date_confirmed_from: Math.floor(Date.now()/1000) - 7*24*60*60 }))}`
+        });
+        const orders = await r2.json();
+
+        // Test 3: pobierz zamówienia ze statusem "Wysłane"
+        const r3 = await fetch(BL_API, {
+            method: 'POST',
+            headers: { 'X-BLToken': BASELINKER_TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `method=getOrders&parameters=${encodeURIComponent(JSON.stringify({ status_id: parseInt(SHIPPED_STATUS_ID||549) }))}`
+        });
+        const shipped = await r3.json();
+
+        return res.json({
+            token_prefix: BASELINKER_TOKEN.slice(0,8) + '...',
+            shipped_status_id: SHIPPED_STATUS_ID,
+            statuses: statuses.status === 'SUCCESS' ? statuses.statuses?.slice(0,5) : statuses,
+            orders_last7days: orders.status === 'SUCCESS' ? `${orders.orders?.length} zamówień` : orders,
+            orders_shipped: shipped.status === 'SUCCESS' ? `${shipped.orders?.length} zamówień ze statusem ${SHIPPED_STATUS_ID}` : shipped
+        });
+    } catch(e) {
+        return res.json({ ok: false, error: e.message });
+    }
+});
+
 app.get('/api/test-email', async (req, res) => {
     const to = req.query.to || MAIL_TO;
     if (!RESEND_KEY) return res.json({ ok: false, error: 'Brak RESEND_API_KEY' });
