@@ -405,6 +405,7 @@ app.get('/zamowienia', (req, res) => {
         <button type="submit">Zaloguj</button></form></div></body></html>`);
     }
 
+    const adminPass = req.query.pass;
     const orders = loadOrders().reverse();
     const rows = orders.map(o => {
         const cart = JSON.parse(o.cart_json || '[]');
@@ -413,9 +414,14 @@ app.get('/zamowienia', (req, res) => {
         const statusLabel = o.status === 'paid' ? '✅ Opłacone' : o.status === 'paid_test' ? '🧪 Test' : '⏳ Oczekuje';
         const items = cart.map(i => `${i.name} x${i.quantity}`).join(', ');
         const date = new Date(o.created_at).toLocaleString('pl-PL');
+        const shippingBtn = (o.status === 'paid' || o.status === 'paid_test')
+            ? `<button onclick="openShipping('${o.order_uuid}','${o.customer_email}','${o.customer_name}')"
+                style="margin-top:6px;padding:5px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px">
+                🚚 Wyślij info o wysyłce
+               </button>` : '';
         return `<tr>
             <td>${date}</td>
-            <td><b>${o.customer_name}</b><br><small>${o.customer_email}</small><br><small>${o.customer_phone}</small></td>
+            <td><b>${o.customer_name}</b><br><small>${o.customer_email}</small><br><small>${o.customer_phone}</small><br>${shippingBtn}</td>
             <td><small>${o.customer_address}</small></td>
             <td><small>${items}</small></td>
             <td><b>${total} zł</b></td>
@@ -443,6 +449,18 @@ app.get('/zamowienia', (req, res) => {
         td{padding:12px 16px;border-bottom:1px solid #f3f4f6;vertical-align:top;font-size:14px}
         tr:hover td{background:#f9fafb}
         .empty{text-align:center;padding:48px;color:#6b7280}
+        .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;align-items:center;justify-content:center}
+        .modal-bg.open{display:flex}
+        .modal{background:#fff;border-radius:14px;padding:32px;width:420px;box-shadow:0 8px 32px rgba(0,0,0,.2)}
+        .modal h3{margin:0 0 20px;font-size:18px}
+        .modal label{display:block;font-size:13px;color:#6b7280;margin-bottom:4px;font-weight:500}
+        .modal input,.modal select{width:100%;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;font-size:14px;margin-bottom:14px;box-sizing:border-box}
+        .modal-btns{display:flex;gap:10px;margin-top:6px}
+        .btn-send{flex:1;padding:11px;background:#16a34a;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600}
+        .btn-cancel{padding:11px 18px;background:#f3f4f6;color:#374151;border:none;border-radius:8px;cursor:pointer;font-size:14px}
+        .msg{margin-top:12px;padding:10px;border-radius:8px;font-size:13px;text-align:center;display:none}
+        .msg.ok{background:#f0fdf4;color:#16a34a;display:block}
+        .msg.err{background:#fef2f2;color:#dc2626;display:block}
     </style>
     </head><body>
     <div class="header"><h1>🛒 Panel zamówień — Konfigurator Półek</h1>
@@ -460,7 +478,73 @@ app.get('/zamowienia', (req, res) => {
         </tr></thead>
         <tbody>${rows}</tbody>
     </table>`}
-    </div></body></html>`);
+    </div>
+
+    <!-- Modal wysyłki -->
+    <div class="modal-bg" id="modalBg">
+      <div class="modal">
+        <h3>🚚 Wyślij powiadomienie o wysyłce</h3>
+        <div id="modalInfo" style="font-size:13px;color:#6b7280;margin-bottom:16px"></div>
+        <label>Kurier</label>
+        <select id="courierSel">
+          <option value="InPost">InPost</option>
+          <option value="DPD">DPD</option>
+          <option value="DHL">DHL</option>
+          <option value="GLS">GLS</option>
+          <option value="Poczta Polska">Poczta Polska</option>
+          <option value="FedEx">FedEx</option>
+          <option value="Inne">Inne</option>
+        </select>
+        <label>Numer przesyłki (opcjonalnie)</label>
+        <input id="trackingNum" type="text" placeholder="np. 123456789012">
+        <div class="modal-btns">
+          <button class="btn-cancel" onclick="closeModal()">Anuluj</button>
+          <button class="btn-send" onclick="sendShipping()">Wyślij email</button>
+        </div>
+        <div class="msg" id="modalMsg"></div>
+      </div>
+    </div>
+
+    <script>
+    let _uuid='',_email='',_name='';
+    function openShipping(uuid,email,name){
+        _uuid=uuid; _email=email; _name=name;
+        document.getElementById('modalInfo').textContent='Do: '+name+' ('+email+')';
+        document.getElementById('trackingNum').value='';
+        document.getElementById('modalMsg').className='msg';
+        document.getElementById('modalBg').classList.add('open');
+    }
+    function closeModal(){ document.getElementById('modalBg').classList.remove('open'); }
+    async function sendShipping(){
+        const courier = document.getElementById('courierSel').value;
+        const tracking = document.getElementById('trackingNum').value.trim();
+        const btn = document.querySelector('.btn-send');
+        btn.disabled=true; btn.textContent='Wysyłanie...';
+        try {
+            const r = await fetch('/api/send-shipping', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({
+                    order_uuid: _uuid,
+                    email: _email,
+                    name: _name,
+                    courier, tracking,
+                    pass: '${adminPass}'
+                })
+            });
+            const d = await r.json();
+            const msg = document.getElementById('modalMsg');
+            if(d.ok){ msg.className='msg ok'; msg.textContent='✅ Email wysłany!'; setTimeout(closeModal,1500); }
+            else { msg.className='msg err'; msg.textContent='❌ '+d.error; }
+        } catch(e){
+            document.getElementById('modalMsg').className='msg err';
+            document.getElementById('modalMsg').textContent='❌ Błąd połączenia';
+        }
+        btn.disabled=false; btn.textContent='Wyślij email';
+    }
+    document.getElementById('modalBg').addEventListener('click', e => { if(e.target===e.currentTarget) closeModal(); });
+    </script>
+    </body></html>`);
 });
 
 // ════════════════════════════════════════════════════════════
@@ -1133,6 +1217,29 @@ async function sendShippingEmail(orderId, email, name, tracking, courier, addres
 }
 app.post('/api/bl-webhook', handleBlWebhook);
 app.get('/api/bl-webhook',  handleBlWebhook);
+
+// ════════════════════════════════════════════════════════════
+//  Ręczne wysłanie emaila o wysyłce z panelu zamówień
+//  POST /api/send-shipping
+// ════════════════════════════════════════════════════════════
+app.post('/api/send-shipping', async (req, res) => {
+    try {
+        const { order_uuid, email, name, courier, tracking, pass } = req.body;
+        if (pass !== ADMIN_PASS) return res.status(403).json({ ok: false, error: 'Brak dostępu' });
+        if (!email) return res.status(400).json({ ok: false, error: 'Brak emaila' });
+
+        // Pobierz adres z orders.json
+        const orders = loadOrders();
+        const order  = orders.find(o => o.order_uuid === order_uuid);
+        const address = order?.customer_address || '';
+
+        await sendShippingEmail(order_uuid, email, name, tracking, courier, address);
+        return res.json({ ok: true });
+    } catch(e) {
+        console.error('❌ send-shipping:', e.message);
+        return res.status(500).json({ ok: false, error: e.message });
+    }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
