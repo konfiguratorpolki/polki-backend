@@ -414,11 +414,16 @@ app.get('/zamowienia', (req, res) => {
         const statusLabel = o.status === 'paid' ? '✅ Opłacone' : o.status === 'paid_test' ? '🧪 Test' : '⏳ Oczekuje';
         const items = cart.map(i => `${i.name} x${i.quantity}`).join(', ');
         const date = new Date(o.created_at).toLocaleString('pl-PL');
+        const shipped = loadShippedEmails();
+        const alreadySent = o.shipping_email_sent || shipped.has(String(o.baselinker_id));
         const shippingBtn = (o.status === 'paid' || o.status === 'paid_test')
-            ? `<button onclick="openShipping('${o.order_uuid}','${o.customer_email}','${o.customer_name}')"
-                style="margin-top:6px;padding:5px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px">
-                🚚 Wyślij info o wysyłce
-               </button>` : '';
+            ? alreadySent
+                ? `<span style="margin-top:6px;display:inline-block;padding:5px 10px;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;border-radius:6px;font-size:12px;font-weight:600">✅ Wysłano info o wysyłce</span>`
+                : `<button onclick="openShipping('${o.order_uuid}','${o.customer_email}','${o.customer_name}')"
+                    style="margin-top:6px;padding:5px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px">
+                    🚚 Wyślij info o wysyłce
+                   </button>`
+            : '';
         return `<tr>
             <td>${date}</td>
             <td><b>${o.customer_name}</b><br><small>${o.customer_email}</small><br><small>${o.customer_phone}</small><br>${shippingBtn}</td>
@@ -1276,12 +1281,21 @@ app.post('/api/send-shipping', async (req, res) => {
         if (pass !== ADMIN_PASS) return res.status(403).json({ ok: false, error: 'Brak dostępu' });
         if (!email) return res.status(400).json({ ok: false, error: 'Brak emaila' });
 
-        // Pobierz adres z orders.json
+        // Pobierz adres z orders.json i zapisz flagę wysłania
         const orders = loadOrders();
-        const order  = orders.find(o => o.order_uuid === order_uuid);
+        const orderIdx = orders.findIndex(o => o.order_uuid === order_uuid);
+        const order = orderIdx >= 0 ? orders[orderIdx] : null;
         const address = order?.customer_address || '';
 
         await sendShippingEmail(order_uuid, email, name, tracking, courier, address);
+
+        // Zapisz flagę że email wysyłki został wysłany
+        if (orderIdx >= 0) {
+            orders[orderIdx].shipping_email_sent = true;
+            orders[orderIdx].shipping_sent_at = new Date().toISOString();
+            fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
+        }
+
         return res.json({ ok: true });
     } catch(e) {
         console.error('❌ send-shipping:', e.message);
