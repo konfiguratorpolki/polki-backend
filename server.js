@@ -1005,8 +1005,8 @@ async function handleBlWebhook(req, res) {
     }
 
     try {
-        // Pobierz zamówienia z statusem "Wysłane" zmienione w ostatnich 10 minutach
-        const since = Math.floor(Date.now() / 1000) - 10 * 60;
+        // Pobierz zamówienia z statusem "Wysłane" zmienione w ostatniej godzinie
+        const since = Math.floor(Date.now() / 1000) - 60 * 60;
         const blRes = await fetch(BL_API, {
             method: 'POST',
             headers: { 'X-BLToken': BASELINKER_TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' },
