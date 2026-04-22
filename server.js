@@ -982,53 +982,77 @@ function trackingUrl(courier, number) {
 }
 
 // BaseLinker może wysyłać GET lub POST — obsługujemy oba
+// Plik do śledzenia już wysłanych emaili wysyłkowych (żeby nie wysyłać dwa razy)
+const SHIPPED_EMAILS_FILE = path.join(__dirname, 'shipped_emails.json');
+function loadShippedEmails() {
+    try { return new Set(JSON.parse(fs.readFileSync(SHIPPED_EMAILS_FILE, 'utf8'))); }
+    catch(e) { return new Set(); }
+}
+function saveShippedEmail(orderId) {
+    const set = loadShippedEmails();
+    set.add(String(orderId));
+    fs.writeFileSync(SHIPPED_EMAILS_FILE, JSON.stringify([...set]));
+}
+
 async function handleBlWebhook(req, res) {
+    console.log('[BL Webhook] method:', req.method);
+    // Odpowiedz natychmiast 200 żeby BL nie czekał
+    res.status(200).json({ ok: true });
+
+    if (!BASELINKER_TOKEN || !SHIPPED_STATUS_ID) {
+        console.warn('⚠️ Brak BASELINKER_TOKEN lub SHIPPED_STATUS_ID');
+        return;
+    }
+
     try {
-        // BaseLinker może wysyłać dane jako JSON body, form-urlencoded lub query params
-        const body = (req.body && Object.keys(req.body).length > 0) ? req.body : req.query;
-        console.log('[BL Webhook] method:', req.method, '| body:', JSON.stringify(body), '| query:', JSON.stringify(req.query));
-
-        // BaseLinker wysyła event jako string lub obiekt
-        const event    = body.event    || body.event_type || body.type || 'order_status_change';
-        const orderId  = body.order_id  || body.orderId   || '';
-        const statusId = String(body.status_id || body.statusId || body.new_status_id || '');
-
-        // Sprawdź czy to status "Wysłano"
-        if (SHIPPED_STATUS_ID && statusId && statusId !== String(SHIPPED_STATUS_ID)) {
-            console.log(`[BL Webhook] Status ${statusId} ≠ SHIPPED_STATUS_ID ${SHIPPED_STATUS_ID} — pomijam`);
-            return res.status(200).json({ ok: true, info: 'nie status wysyłki' });
-        }
-
-        if (!orderId) return res.status(400).json({ error: 'Brak order_id' });
-        if (!BASELINKER_TOKEN) {
-            console.warn('⚠️ Brak BASELINKER_TOKEN');
-            return res.status(200).json({ ok: false, error: 'Brak tokena BL' });
-        }
-
-        // Pobierz szczegóły zamówienia z BaseLinker
+        // Pobierz zamówienia z statusem "Wysłane" zmienione w ostatnich 10 minutach
+        const since = Math.floor(Date.now() / 1000) - 10 * 60;
         const blRes = await fetch(BL_API, {
             method: 'POST',
             headers: { 'X-BLToken': BASELINKER_TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: `method=getOrders&parameters=${encodeURIComponent(JSON.stringify({ order_id: parseInt(orderId) }))}`
+            body: `method=getOrders&parameters=${encodeURIComponent(JSON.stringify({
+                status_id: parseInt(SHIPPED_STATUS_ID),
+                date_confirmed_from: since
+            }))}`
         });
         const blData = await blRes.json();
 
-        if (blData.status !== 'SUCCESS' || !blData.orders?.length) {
+        if (blData.status !== 'SUCCESS') {
             console.error('❌ BL getOrders:', JSON.stringify(blData));
-            return res.status(200).json({ ok: false, error: 'Nie znaleziono zamówienia w BL' });
+            return;
         }
 
-        const order    = blData.orders[0];
-        const email    = order.email;
-        const name     = order.delivery_fullname || order.invoice_fullname || '';
-        const tracking = order.packages?.[0]?.tracking_number || order.package_number || '';
-        const courier  = order.packages?.[0]?.courier_code    || order.delivery_method || '';
-        const address  = [order.delivery_address, order.delivery_postcode, order.delivery_city].filter(Boolean).join(', ');
+        const orders = blData.orders || [];
+        console.log(`[BL Webhook] Znaleziono ${orders.length} zamówień ze statusem Wysłane`);
 
-        if (!email) {
-            console.warn('⚠️ Brak emaila w zamówieniu BL:', orderId);
-            return res.status(200).json({ ok: false, error: 'Brak emaila klienta' });
+        // Filtruj tylko zamówienia ze źródła konfiguratora i te co nie dostały jeszcze emaila
+        const shippedEmails = loadShippedEmails();
+        const toNotify = orders.filter(o => {
+            if (shippedEmails.has(String(o.order_id))) return false;
+            // Tylko zamówienia z konfiguratora (opcjonalnie)
+            return true;
+        });
+
+        for (const order of toNotify) {
+            const orderId = order.order_id;
+            const email   = order.email;
+            const name    = order.delivery_fullname || order.invoice_fullname || '';
+            const tracking = order.packages?.[0]?.tracking_number || order.package_number || '';
+            const courier  = order.packages?.[0]?.courier_code    || order.delivery_method || '';
+            const address  = [order.delivery_address, order.delivery_postcode, order.delivery_city].filter(Boolean).join(', ');
+
+            if (!email) { console.warn(`⚠️ Brak emaila dla zamówienia #${orderId}`); continue; }
+
+            await sendShippingEmail(orderId, email, name, tracking, courier, address);
+            saveShippedEmail(orderId);
         }
+    } catch(err) {
+        console.error('❌ bl-webhook:', err.message);
+    }
+}
+
+async function sendShippingEmail(orderId, email, name, tracking, courier, address) {
+    if (!RESEND_KEY) return;
 
         const tUrl     = tracking ? trackingUrl(courier, tracking) : null;
         const trackBtn = tUrl
@@ -1110,17 +1134,10 @@ async function handleBlWebhook(req, res) {
             })
         });
         const d = await r.json();
-        if (r.ok) {
-            console.log(`📧 Email wysyłki do ${email} (zamówienie #${orderId}):`, d.id);
-            return res.status(200).json({ ok: true, email_id: d.id });
-        } else {
-            console.error('❌ Resend błąd:', JSON.stringify(d));
-            return res.status(200).json({ ok: false, error: d.message });
-        }
-
+        if (r.ok) console.log(`📧 Email wysyłki do ${email} (zamówienie #${orderId}):`, d.id);
+        else console.error('❌ Resend błąd:', JSON.stringify(d));
     } catch(err) {
-        console.error('❌ bl-webhook:', err.message);
-        return res.status(200).json({ ok: false, error: err.message }); // zawsze 200 żeby BL nie powtarzał
+        console.error('❌ sendShippingEmail:', err.message);
     }
 }
 app.post('/api/bl-webhook', handleBlWebhook);
