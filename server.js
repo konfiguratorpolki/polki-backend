@@ -956,6 +956,177 @@ app.get('/api/order-snapshots', (req, res) => {
     }
 });
 
+// ════════════════════════════════════════════════════════════
+//  BaseLinker Webhook — powiadomienie o wysyłce
+//  POST /api/bl-webhook
+//  BaseLinker wywołuje ten endpoint gdy zmieni się status zamówienia.
+//  Gdy status = SHIPPED_STATUS_ID → wysyłamy email z numerem przewozowym.
+//
+//  Konfiguracja w Railway Variables:
+//    SHIPPED_STATUS_ID  — ID statusu "Wysłano" z BaseLinker
+//    BASELINKER_TOKEN   — token API BaseLinker
+// ════════════════════════════════════════════════════════════
+const SHIPPED_STATUS_ID = process.env.SHIPPED_STATUS_ID || '';
+
+// Generuj link śledzenia na podstawie nazwy kuriera
+function trackingUrl(courier, number) {
+    const c = (courier || '').toLowerCase();
+    if (c.includes('inpost'))  return `https://inpost.pl/sledzenie-przesylek?number=${number}`;
+    if (c.includes('dpd'))     return `https://tracktrace.dpd.com.pl/parcelDetails?p1=${number}`;
+    if (c.includes('dhl'))     return `https://www.dhl.com/pl-pl/home/tracking.html?tracking-id=${number}`;
+    if (c.includes('gls'))     return `https://gls-group.eu/PL/pl/sledzenie-paczek?match=${number}`;
+    if (c.includes('poczta') || c.includes('pp')) return `https://emonitoring.poczta-polska.pl/?numer=${number}`;
+    if (c.includes('fedex'))   return `https://www.fedex.com/fedextrack/?trknbr=${number}`;
+    if (c.includes('ups'))     return `https://www.ups.com/track?tracknum=${number}`;
+    return null;
+}
+
+app.post('/api/bl-webhook', async (req, res) => {
+    try {
+        const body = req.body;
+        console.log('[BL Webhook]', JSON.stringify(body));
+
+        // BaseLinker wysyła event jako string lub obiekt
+        const event    = body.event    || body.event_type || '';
+        const orderId  = body.order_id  || body.orderId   || '';
+        const statusId = String(body.status_id || body.statusId || '');
+
+        // Akceptujemy tylko zmianę statusu
+        if (!event.includes('status') && !event.includes('order')) {
+            return res.status(200).json({ ok: true, info: 'event ignorowany' });
+        }
+
+        // Sprawdź czy to status "Wysłano"
+        if (SHIPPED_STATUS_ID && statusId !== String(SHIPPED_STATUS_ID)) {
+            console.log(`[BL Webhook] Status ${statusId} ≠ SHIPPED_STATUS_ID ${SHIPPED_STATUS_ID} — pomijam`);
+            return res.status(200).json({ ok: true, info: 'nie status wysyłki' });
+        }
+
+        if (!orderId) return res.status(400).json({ error: 'Brak order_id' });
+        if (!BASELINKER_TOKEN) {
+            console.warn('⚠️ Brak BASELINKER_TOKEN');
+            return res.status(200).json({ ok: false, error: 'Brak tokena BL' });
+        }
+
+        // Pobierz szczegóły zamówienia z BaseLinker
+        const blRes = await fetch(BL_API, {
+            method: 'POST',
+            headers: { 'X-BLToken': BASELINKER_TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `method=getOrders&parameters=${encodeURIComponent(JSON.stringify({ order_id: parseInt(orderId) }))}`
+        });
+        const blData = await blRes.json();
+
+        if (blData.status !== 'SUCCESS' || !blData.orders?.length) {
+            console.error('❌ BL getOrders:', JSON.stringify(blData));
+            return res.status(200).json({ ok: false, error: 'Nie znaleziono zamówienia w BL' });
+        }
+
+        const order    = blData.orders[0];
+        const email    = order.email;
+        const name     = order.delivery_fullname || order.invoice_fullname || '';
+        const tracking = order.packages?.[0]?.tracking_number || order.package_number || '';
+        const courier  = order.packages?.[0]?.courier_code    || order.delivery_method || '';
+        const address  = [order.delivery_address, order.delivery_postcode, order.delivery_city].filter(Boolean).join(', ');
+
+        if (!email) {
+            console.warn('⚠️ Brak emaila w zamówieniu BL:', orderId);
+            return res.status(200).json({ ok: false, error: 'Brak emaila klienta' });
+        }
+
+        const tUrl     = tracking ? trackingUrl(courier, tracking) : null;
+        const trackBtn = tUrl
+            ? `<table width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0">
+                 <tr><td style="text-align:center">
+                   <a href="${tUrl}" style="display:inline-block;padding:13px 32px;background:#16a34a;color:#fff;text-decoration:none;border-radius:9px;font-size:14px;font-weight:700">
+                     🚚 Śledź przesyłkę
+                   </a>
+                 </td></tr>
+               </table>`
+            : '';
+
+        const trackInfo = tracking
+            ? `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:14px">
+                 <tr>
+                   <td style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px 18px;width:48%;vertical-align:top">
+                     <p style="margin:0 0 3px;font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.1em">Numer przesyłki</p>
+                     <p style="margin:0;font-size:15px;font-weight:700;color:#111827">${tracking}</p>
+                   </td>
+                   <td style="width:4%"></td>
+                   <td style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px 18px;width:48%;vertical-align:top">
+                     <p style="margin:0 0 3px;font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.1em">Kurier</p>
+                     <p style="margin:0;font-size:15px;font-weight:700;color:#111827">${courier || '—'}</p>
+                   </td>
+                 </tr>
+               </table>`
+            : '';
+
+        // Wyślij email przez Resend
+        const r = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                from: 'regaliki.pl <zamowienia@regaliki.pl>',
+                reply_to: 'regaliki.pl@gmail.com',
+                to: [email],
+                subject: `Twoja paczka jest w drodze! 🚚 #${orderId}`,
+                html: `<!DOCTYPE html>
+<html lang="pl">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:'Helvetica Neue',Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 16px">
+<tr><td align="center">
+<table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%">
+
+  <tr><td style="background:#fff;border-radius:14px 14px 0 0;padding:32px 36px 0">
+    <p style="margin:0 0 20px;font-size:13px;font-weight:700;color:#16a34a">🪵 regaliki.pl</p>
+
+    <h1 style="margin:0 0 6px;font-size:22px;font-weight:700;color:#111827">Paczka wysłana! 🚚</h1>
+    <p style="margin:0 0 24px;font-size:14px;color:#6b7280;line-height:1.6">
+      Cześć <strong style="color:#374151">${name}</strong> — Twoja półka jest już w drodze do Ciebie!
+    </p>
+
+    ${trackBtn}
+    <hr style="border:none;border-top:1px solid #f3f4f6;margin:0 0 20px">
+
+    ${trackInfo}
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px">
+      <tr>
+        <td style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:13px 18px">
+          <p style="margin:0 0 2px;font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.1em">Adres dostawy</p>
+          <p style="margin:0;font-size:14px;color:#374151;font-weight:500">${name}<br>${address}</p>
+        </td>
+      </tr>
+    </table>
+  </td></tr>
+
+  <tr><td style="background:#f9fafb;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 14px 14px;padding:18px 36px;text-align:center">
+    <p style="margin:0 0 5px;font-size:12px;color:#9ca3af">Pytania? Napisz do nas:</p>
+    <a href="mailto:regaliki.pl@gmail.com" style="font-size:13px;font-weight:600;color:#16a34a;text-decoration:none">regaliki.pl@gmail.com</a>
+    <p style="margin:12px 0 0;font-size:11px;color:#d1d5db">© 2026 Nowy Wymiar Damian Maga · regaliki.pl</p>
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body></html>`
+            })
+        });
+        const d = await r.json();
+        if (r.ok) {
+            console.log(`📧 Email wysyłki do ${email} (zamówienie #${orderId}):`, d.id);
+            return res.status(200).json({ ok: true, email_id: d.id });
+        } else {
+            console.error('❌ Resend błąd:', JSON.stringify(d));
+            return res.status(200).json({ ok: false, error: d.message });
+        }
+
+    } catch(err) {
+        console.error('❌ bl-webhook:', err.message);
+        return res.status(200).json({ ok: false, error: err.message }); // zawsze 200 żeby BL nie powtarzał
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`✅ Backend port ${PORT} | Tryb: ${TEST_MODE ? 'TESTOWY' : 'PRODUKCJA'}`);
