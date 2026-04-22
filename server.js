@@ -19,9 +19,12 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '5mb' }));
 
-// Zamówienia w pliku JSON
-const ORDERS_FILE    = path.join(__dirname, 'orders.json');
-const SNAPSHOTS_FILE = path.join(__dirname, 'snapshots.json');
+// Zamówienia w pliku JSON — na trwałym wolumenie Railway (/data)
+// Trwały katalog danych — Railway Volume zamontowane pod /data
+const DATA_DIR       = process.env.DATA_DIR || '/data';
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+const ORDERS_FILE    = path.join(DATA_DIR, 'orders.json');
+const SNAPSHOTS_FILE = path.join(DATA_DIR, 'snapshots.json');
 
 const SELF_URL = process.env.BACKEND_URL || 'https://polki-backend-production.up.railway.app';
 
@@ -1245,7 +1248,7 @@ function trackingUrl(courier, number) {
 
 // BaseLinker może wysyłać GET lub POST — obsługujemy oba
 // Plik do śledzenia już wysłanych emaili wysyłkowych (żeby nie wysyłać dwa razy)
-const SHIPPED_EMAILS_FILE = path.join(__dirname, 'shipped_emails.json');
+const SHIPPED_EMAILS_FILE = path.join(DATA_DIR, 'shipped_emails.json');
 function loadShippedEmails() {
     try { return new Set(JSON.parse(fs.readFileSync(SHIPPED_EMAILS_FILE, 'utf8'))); }
     catch(e) { return new Set(); }
