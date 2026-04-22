@@ -1129,8 +1129,8 @@ async function handleBlWebhook(req, res) {
     }
 
     try {
-        // Pobierz zamówienia z statusem "Wysłane" zmienione w ostatnich 2 godzinach
-        const since = Math.floor(Date.now() / 1000) - 2 * 60 * 60;
+        // Pobierz zamówienia z statusem "Wysłane" zmienione w ostatnich 15 minutach
+        const since = Math.floor(Date.now() / 1000) - 15 * 60;
         const blRes = await fetch(BL_API, {
             method: 'POST',
             headers: { 'X-BLToken': BASELINKER_TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1146,14 +1146,22 @@ async function handleBlWebhook(req, res) {
             return;
         }
 
-        const orders = blData.orders || [];
-        console.log(`[BL Webhook] Znaleziono ${orders.length} zamówień ze statusem Wysłane`);
+        const blOrders = blData.orders || [];
+        console.log(`[BL Webhook] Znaleziono ${blOrders.length} zamówień ze statusem Wysłane`);
 
-        // Filtruj tylko zamówienia ze źródła konfiguratora i te co nie dostały jeszcze emaila
+        // Wczytaj lokalne zamówienia z konfiguratora — filtrujemy TYLKO te
+        const localOrders = loadOrders();
+        const localBlIds = new Set(localOrders.map(o => String(o.baselinker_id)).filter(Boolean));
+
+        // Filtruj: tylko zamówienia z konfiguratora i te co nie dostały jeszcze emaila
         const shippedEmails = loadShippedEmails();
-        const toNotify = orders.filter(o => {
+        const toNotify = blOrders.filter(o => {
             if (shippedEmails.has(String(o.order_id))) return false;
-            // Tylko zamówienia z konfiguratora (opcjonalnie)
+            // TYLKO zamówienia które są w naszym orders.json (z konfiguratora)
+            if (!localBlIds.has(String(o.order_id))) {
+                console.log(`[BL Webhook] Pomijam #${o.order_id} — nie z konfiguratora`);
+                return false;
+            }
             return true;
         });
 
