@@ -707,7 +707,7 @@ async function sendEmails(order, p24Id='TEST') {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                from: 'Konfigurator Półek <zamowienia@regaliki.pl>',
+                from: 'regaliki.pl <zamowienia@regaliki.pl>',
                 reply_to: 'regaliki.pl@gmail.com',
                 to: [MAIL_TO],
                 subject: `🛒 Nowe zamówienie #${order.order_uuid.slice(0,8)} — ${total} zł`,
@@ -751,21 +751,81 @@ async function sendEmails(order, p24Id='TEST') {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                from: 'Nowy Wymiar <zamowienia@regaliki.pl>',
+                from: 'regaliki.pl <zamowienia@regaliki.pl>',
                 reply_to: 'regaliki.pl@gmail.com',
                 to: [order.customer_email],
                 subject: `Potwierdzenie zamówienia #${blId || order.order_uuid.slice(0,8)}`,
-                html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
-                       <h2 style="color:#16a34a">Dziękujemy za zamówienie! 🎉</h2>
-                       <p>Cześć <b>${order.customer_name}</b>,<br><br>
-                       Twoje zamówienie zostało przyjęte i trafiło do realizacji.<br>
-                       Realizacja: <b>3–5 dni roboczych</b><br>
-                       Kwota: <b>${total} zł</b><br>
-                       Adres dostawy: ${order.customer_address}</p>
-                       ${orderLinkHtml}
-                       <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
-                       <p style="color:#6b7280;font-size:13px">Masz pytania? Napisz na regaliki.pl@gmail.com</p>
-                       </div>`
+                html: `<!DOCTYPE html>
+<html lang="pl">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:'Helvetica Neue',Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 0">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%">
+
+  <!-- HEADER -->
+  <tr><td style="background:#16a34a;border-radius:12px 12px 0 0;padding:28px 36px;text-align:center">
+    <table cellpadding="0" cellspacing="0" align="center">
+      <tr>
+        <td style="background:rgba(255,255,255,0.2);border-radius:10px;width:38px;height:38px;text-align:center;vertical-align:middle;padding:0 10px">
+          <span style="font-size:20px;line-height:38px">🪵</span>
+        </td>
+        <td style="padding-left:10px">
+          <span style="font-size:20px;font-weight:700;color:#fff;letter-spacing:-0.3px">regaliki.pl</span>
+        </td>
+      </tr>
+    </table>
+  </td></tr>
+
+  <!-- BODY -->
+  <tr><td style="background:#fff;padding:36px 36px 28px">
+    <p style="margin:0 0 6px;font-size:13px;font-weight:600;color:#16a34a;text-transform:uppercase;letter-spacing:.08em">Potwierdzenie zamówienia</p>
+    <h1 style="margin:0 0 20px;font-size:24px;font-weight:700;color:#111827;line-height:1.2">Dziękujemy za zamówienie! 🎉</h1>
+    <p style="margin:0 0 24px;font-size:15px;color:#374151;line-height:1.6">
+      Cześć <strong>${order.customer_name}</strong>,<br>
+      Twoje zamówienie zostało przyjęte i trafiło do realizacji. Poinformujemy Cię gdy wyślemy paczkę.
+    </p>
+
+    <!-- INFO BOXES -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
+      <tr>
+        <td width="48%" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:16px 18px;vertical-align:top">
+          <p style="margin:0 0 4px;font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.08em">Kwota zamówienia</p>
+          <p style="margin:0;font-size:22px;font-weight:700;color:#16a34a">${total} zł</p>
+        </td>
+        <td width="4%"></td>
+        <td width="48%" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:16px 18px;vertical-align:top">
+          <p style="margin:0 0 4px;font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.08em">Czas realizacji</p>
+          <p style="margin:0;font-size:22px;font-weight:700;color:#111827">3–7 dni</p>
+          <p style="margin:0;font-size:12px;color:#6b7280">roboczych</p>
+        </td>
+      </tr>
+    </table>
+
+    <!-- ADDRESS -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px">
+      <tr>
+        <td style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:16px 18px">
+          <p style="margin:0 0 4px;font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.08em">Adres dostawy</p>
+          <p style="margin:0;font-size:14px;color:#374151;line-height:1.5">${order.customer_address}</p>
+        </td>
+      </tr>
+    </table>
+
+    ${orderLinkHtml}
+  </td></tr>
+
+  <!-- FOOTER -->
+  <tr><td style="background:#f9fafb;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;padding:20px 36px;text-align:center">
+    <p style="margin:0 0 6px;font-size:12px;color:#9ca3af">Masz pytania? Napisz do nas:</p>
+    <a href="mailto:regaliki.pl@gmail.com" style="font-size:13px;font-weight:600;color:#16a34a;text-decoration:none">regaliki.pl@gmail.com</a>
+    <p style="margin:12px 0 0;font-size:11px;color:#d1d5db">© 2026 Nowy Wymiar Damian Maga &nbsp;·&nbsp; regaliki.pl</p>
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body></html>`
             })
         });
         const d2 = await r2.json();
@@ -844,21 +904,23 @@ app.get('/api/invoice-pdf', async (req, res) => {
 // ════════════════════════════════════════════════════════════
 // Test wysyłki emaila — GET /api/test-email?to=adres@gmail.com
 app.get('/api/test-email', async (req, res) => {
-    const to = req.query.to || GMAIL_USER;
-    if (!GMAIL_PASS) return res.json({ ok: false, error: 'Brak GMAIL_APP_PASSWORD' });
+    const to = req.query.to || MAIL_TO;
+    if (!RESEND_KEY) return res.json({ ok: false, error: 'Brak RESEND_API_KEY' });
     try {
-        const transporter = nodemailer.createTransport({
-            service: 'gmail',
-            auth: { user: GMAIL_USER, pass: GMAIL_PASS }
+        const r = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                from: 'regaliki.pl <zamowienia@regaliki.pl>',
+                reply_to: 'regaliki.pl@gmail.com',
+                to: [to],
+                subject: 'Test emaila — regaliki.pl',
+                html: '<p>Działa! Resend wysyła poprawnie z domeny regaliki.pl.</p>'
+            })
         });
-        await transporter.verify();
-        await transporter.sendMail({
-            from: `"Test Regaliki" <${GMAIL_USER}>`,
-            to,
-            subject: 'Test emaila z Railway',
-            text: 'Działa! Gmail SMTP działa poprawnie.'
-        });
-        res.json({ ok: true, from: GMAIL_USER, to });
+        const d = await r.json();
+        if (r.ok) res.json({ ok: true, to, id: d.id });
+        else res.json({ ok: false, error: d.message || JSON.stringify(d) });
     } catch(e) {
         res.json({ ok: false, error: e.message });
     }
