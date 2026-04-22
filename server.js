@@ -377,7 +377,7 @@ app.post('/api/paynow-notify', async (req, res) => {
             } catch(e) { console.error('❌ BaseLinker wyjątek:', e.message); }
 
             // Wyślij emaile
-            await sendEmails(order, paymentId);
+            await sendEmails(order, paymentId, cartWithImgUrls);
 
             pendingPaynow.delete(externalId);
         }
@@ -572,7 +572,7 @@ app.post('/api/test-order', async (req, res) => {
                 const snapsToSave = (orderData.cart||[]).map(i=>({code:i.code,snapshot:i.snapshot||''})).filter(i=>i.snapshot);
                 if (snapsToSave.length > 0) saveSnapshots(String(blData.order_id), snapsToSave);
                 // Wyślij emaile
-                await sendEmails(order, 'TEST');
+                await sendEmails(order, 'TEST', cartWithImgUrls);
                 return res.json({ success: true, baselinker_id: blData.order_id, order_uuid: externalId });
             } else {
                 console.error('❌ BaseLinker test:', blData.error_message);
@@ -687,12 +687,15 @@ app.post('/api/p24-notify', async (req, res) => {
 });
 
 // Wysyłka emaili przez Resend API
-async function sendEmails(order, p24Id='TEST') {
+async function sendEmails(order, p24Id='TEST', cartWithImgUrls=[]) {
     if (!RESEND_KEY) { console.log('⚠️ Brak RESEND_API_KEY — email pominięty'); return; }
     const cart  = JSON.parse(order.cart_json || '[]');
     const total = ((order.total_amount||0)/100).toFixed(2);
+    // Użyj cartWithImgUrls jeśli dostępne, inaczej cart z cart_json
+    const items = cartWithImgUrls.length > 0 ? cartWithImgUrls : cart;
 
-    const itemsHtml = cart.map((i) => `<tr>
+    // Wiersze produktów dla emaila właściciela
+    const itemsHtml = items.map((i) => `<tr>
         <td style="padding:12px;vertical-align:middle">
             <b>${i.name}</b> x${i.quantity}<br>
             <small style="color:#6b7280">${i.summary || ''}</small><br>
@@ -700,6 +703,30 @@ async function sendEmails(order, p24Id='TEST') {
         </td>
         <td style="padding:12px;vertical-align:middle;text-align:right"><b>${(i.price*i.quantity).toFixed(2)} zł</b></td>
     </tr>`).join('');
+
+    // Miniatury półek dla emaila klienta
+    const snapshotsHtml = items
+        .filter(i => i.imgUrl)
+        .map(i => `<td style="padding:4px;text-align:center;vertical-align:top">
+            <img src="${i.imgUrl}" width="150" alt="${i.name}"
+                 style="width:150px;height:150px;object-fit:contain;border-radius:8px;border:1px solid #e5e7eb;background:#f9fafb;display:block">
+            <p style="margin:6px 0 0;font-size:11px;color:#6b7280;font-weight:500">${i.name}</p>
+        </td>`)
+        .join('');
+
+    const snapshotsSectionHtml = snapshotsHtml ? `
+    <!-- SHELF PREVIEWS -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
+      <tr>
+        <td>
+          <p style="margin:0 0 12px;font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.08em">Twoje półki</p>
+          <table cellpadding="0" cellspacing="0">
+            <tr>${snapshotsHtml}</tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+    <tr><td style="padding:0 0 20px"><hr style="border:none;border-top:1px solid #f3f4f6;margin:0"></td></tr>` : '';
 
     // Email do właściciela
     try {
@@ -737,15 +764,9 @@ async function sendEmails(order, p24Id='TEST') {
         const blId = order.baselinker_id || null;
         const orderLink = blId ? `https://regaliki.pl/zamowienia/zamowienie.html?id=${blId}` : null;
         const orderLinkHtml = orderLink
-            ? `<div style="margin:24px 0;text-align:center">
-                 <a href="${orderLink}" style="display:inline-block;padding:14px 32px;background:#16a34a;color:#fff;text-decoration:none;border-radius:10px;font-size:15px;font-weight:600;">
-                   📦 Sprawdź status zamówienia
-                 </a>
-               </div>
-               <p style="color:#6b7280;font-size:13px;text-align:center">
-                 lub wklej ten link w przeglądarce:<br>
-                 <a href="${orderLink}" style="color:#16a34a">${orderLink}</a>
-               </p>` : '';
+            ? `<a href="${orderLink}" style="display:inline-block;padding:13px 32px;background:#16a34a;color:#fff;text-decoration:none;border-radius:9px;font-size:14px;font-weight:700">
+                 📦 Sprawdź status zamówienia
+               </a>` : '';
 
         const r2 = await fetch('https://api.resend.com/emails', {
             method: 'POST',
@@ -759,45 +780,44 @@ async function sendEmails(order, p24Id='TEST') {
 <html lang="pl">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:#f3f4f6;font-family:'Helvetica Neue',Arial,sans-serif">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 0">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 16px">
 <tr><td align="center">
-<table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%">
-
-  <!-- HEADER -->
-  <tr><td style="background:#16a34a;border-radius:12px 12px 0 0;padding:28px 36px;text-align:center">
-    <table cellpadding="0" cellspacing="0" align="center">
-      <tr>
-        <td style="background:rgba(255,255,255,0.2);border-radius:10px;width:38px;height:38px;text-align:center;vertical-align:middle;padding:0 10px">
-          <span style="font-size:20px;line-height:38px">🪵</span>
-        </td>
-        <td style="padding-left:10px">
-          <span style="font-size:20px;font-weight:700;color:#fff;letter-spacing:-0.3px">regaliki.pl</span>
-        </td>
-      </tr>
-    </table>
-  </td></tr>
+<table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%">
 
   <!-- BODY -->
-  <tr><td style="background:#fff;padding:36px 36px 28px">
-    <p style="margin:0 0 6px;font-size:13px;font-weight:600;color:#16a34a;text-transform:uppercase;letter-spacing:.08em">Potwierdzenie zamówienia</p>
-    <h1 style="margin:0 0 20px;font-size:24px;font-weight:700;color:#111827;line-height:1.2">Dziękujemy za zamówienie! 🎉</h1>
-    <p style="margin:0 0 24px;font-size:15px;color:#374151;line-height:1.6">
-      Cześć <strong>${order.customer_name}</strong>,<br>
-      Twoje zamówienie zostało przyjęte i trafiło do realizacji. Poinformujemy Cię gdy wyślemy paczkę.
+  <tr><td style="background:#fff;border-radius:14px 14px 0 0;padding:32px 36px 0">
+
+    <!-- Mini logo -->
+    <p style="margin:0 0 20px;font-size:13px;font-weight:700;color:#16a34a">🪵 regaliki.pl</p>
+
+    <h1 style="margin:0 0 6px;font-size:22px;font-weight:700;color:#111827">Dziękujemy za zamówienie! 🎉</h1>
+    <p style="margin:0 0 24px;font-size:14px;color:#6b7280;line-height:1.6">
+      Cześć <strong style="color:#374151">${order.customer_name}</strong> — Twoje zamówienie trafiło do realizacji.<br>
+      Poinformujemy Cię mailowo gdy wyślemy paczkę.
     </p>
 
+    <!-- STATUS BUTTON -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px">
+      <tr><td style="text-align:center">
+        ${orderLinkHtml}
+      </td></tr>
+    </table>
+
+    <hr style="border:none;border-top:1px solid #f3f4f6;margin:0 0 24px">
+
+    ${snapshotsSectionHtml}
+
     <!-- INFO BOXES -->
-    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:14px">
       <tr>
-        <td width="48%" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:16px 18px;vertical-align:top">
-          <p style="margin:0 0 4px;font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.08em">Kwota zamówienia</p>
-          <p style="margin:0;font-size:22px;font-weight:700;color:#16a34a">${total} zł</p>
+        <td style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 18px;width:48%;vertical-align:top">
+          <p style="margin:0 0 3px;font-size:10px;font-weight:700;color:#15803d;text-transform:uppercase;letter-spacing:.1em">Kwota zamówienia</p>
+          <p style="margin:0;font-size:23px;font-weight:800;color:#15803d">${total} zł</p>
         </td>
-        <td width="4%"></td>
-        <td width="48%" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:16px 18px;vertical-align:top">
-          <p style="margin:0 0 4px;font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.08em">Czas realizacji</p>
-          <p style="margin:0;font-size:22px;font-weight:700;color:#111827">3–7 dni</p>
-          <p style="margin:0;font-size:12px;color:#6b7280">roboczych</p>
+        <td style="width:4%"></td>
+        <td style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px 18px;width:48%;vertical-align:top">
+          <p style="margin:0 0 3px;font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.1em">Czas realizacji</p>
+          <p style="margin:0;font-size:23px;font-weight:800;color:#111827">3–7 <span style="font-size:13px;font-weight:500;color:#6b7280">dni rob.</span></p>
         </td>
       </tr>
     </table>
@@ -805,21 +825,20 @@ async function sendEmails(order, p24Id='TEST') {
     <!-- ADDRESS -->
     <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px">
       <tr>
-        <td style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:16px 18px">
-          <p style="margin:0 0 4px;font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.08em">Adres dostawy</p>
-          <p style="margin:0;font-size:14px;color:#374151;line-height:1.5">${order.customer_address}</p>
+        <td style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:13px 18px">
+          <p style="margin:0 0 2px;font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.1em">Adres dostawy</p>
+          <p style="margin:0;font-size:14px;color:#374151;font-weight:500">${order.customer_address}</p>
         </td>
       </tr>
     </table>
 
-    ${orderLinkHtml}
   </td></tr>
 
   <!-- FOOTER -->
-  <tr><td style="background:#f9fafb;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;padding:20px 36px;text-align:center">
-    <p style="margin:0 0 6px;font-size:12px;color:#9ca3af">Masz pytania? Napisz do nas:</p>
+  <tr><td style="background:#f9fafb;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 14px 14px;padding:20px 36px;text-align:center">
+    <p style="margin:0 0 6px;font-size:12px;color:#9ca3af">Pytania? Napisz do nas:</p>
     <a href="mailto:regaliki.pl@gmail.com" style="font-size:13px;font-weight:600;color:#16a34a;text-decoration:none">regaliki.pl@gmail.com</a>
-    <p style="margin:12px 0 0;font-size:11px;color:#d1d5db">© 2026 Nowy Wymiar Damian Maga &nbsp;·&nbsp; regaliki.pl</p>
+    <p style="margin:14px 0 0;font-size:11px;color:#d1d5db">© 2026 Nowy Wymiar Damian Maga · regaliki.pl</p>
   </td></tr>
 
 </table>
