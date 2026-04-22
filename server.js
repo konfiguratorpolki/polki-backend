@@ -1053,33 +1053,24 @@ async function handleBlWebhook(req, res) {
 
 async function sendShippingEmail(orderId, email, name, tracking, courier, address) {
     if (!RESEND_KEY) return;
-
-        const tUrl     = tracking ? trackingUrl(courier, tracking) : null;
-        const trackBtn = tUrl
-            ? `<table width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0">
-                 <tr><td style="text-align:center">
-                   <a href="${tUrl}" style="display:inline-block;padding:13px 32px;background:#16a34a;color:#fff;text-decoration:none;border-radius:9px;font-size:14px;font-weight:700">
-                     🚚 Śledź przesyłkę
-                   </a>
-                 </td></tr>
-               </table>`
-            : '';
-
-        const trackInfo = tracking
-            ? `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:14px">
-                 <tr>
-                   <td style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px 18px;width:48%;vertical-align:top">
-                     <p style="margin:0 0 3px;font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.1em">Numer przesyłki</p>
-                     <p style="margin:0;font-size:15px;font-weight:700;color:#111827">${tracking}</p>
-                   </td>
-                   <td style="width:4%"></td>
-                   <td style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px 18px;width:48%;vertical-align:top">
-                     <p style="margin:0 0 3px;font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.1em">Kurier</p>
-                     <p style="margin:0;font-size:15px;font-weight:700;color:#111827">${courier || '—'}</p>
-                   </td>
-                 </tr>
-               </table>`
-            : '';
+    try {
+    const tUrl = tracking ? trackingUrl(courier, tracking) : null;
+    const trackBtn = tUrl
+        ? `<table width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0"><tr><td style="text-align:center">
+             <a href="${tUrl}" style="display:inline-block;padding:13px 32px;background:#16a34a;color:#fff;text-decoration:none;border-radius:9px;font-size:14px;font-weight:700">🚚 Śledź przesyłkę</a>
+           </td></tr></table>` : '';
+    const trackInfo = tracking
+        ? `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:14px"><tr>
+             <td style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px 18px;width:48%;vertical-align:top">
+               <p style="margin:0 0 3px;font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.1em">Numer przesyłki</p>
+               <p style="margin:0;font-size:15px;font-weight:700;color:#111827">${tracking}</p>
+             </td>
+             <td style="width:4%"></td>
+             <td style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px 18px;width:48%;vertical-align:top">
+               <p style="margin:0 0 3px;font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.1em">Kurier</p>
+               <p style="margin:0;font-size:15px;font-weight:700;color:#111827">${courier || '—'}</p>
+             </td>
+           </tr></table>` : '';
 
         // Wyślij email przez Resend
         const r = await fetch('https://api.resend.com/emails', {
