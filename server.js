@@ -1405,7 +1405,9 @@ async function fetchInvoicePdf(blOrderId) {
     }
 }
 
-async function sendShippingEmail(orderId, email, name, tracking, courier, address) {
+// orderId    — BaseLinker order_id (do pobrania faktury)
+// displayId  — numer wyświetlany w temacie emaila (może być order_uuid jeśli brak BL id)
+async function sendShippingEmail(orderId, email, name, tracking, courier, address, displayId) {
     if (!RESEND_KEY) return;
     try {
     const tUrl = tracking ? trackingUrl(courier, tracking) : null;
@@ -1442,7 +1444,7 @@ async function sendShippingEmail(orderId, email, name, tracking, courier, addres
                 from: 'regaliki.pl <zamowienia@regaliki.pl>',
                 reply_to: 'regaliki.pl@gmail.com',
                 to: [email],
-                subject: `Twoja paczka jest w drodze! 🚚 #${orderId}`,
+                subject: `Twoja paczka jest w drodze! 🚚 #${displayId || orderId}`,
                 ...(attachments.length > 0 ? { attachments } : {}),
                 html: `<!DOCTYPE html>
 <html lang="pl">
@@ -1507,13 +1509,14 @@ app.post('/api/send-shipping', async (req, res) => {
         if (pass !== ADMIN_PASS) return res.status(403).json({ ok: false, error: 'Brak dostępu' });
         if (!email) return res.status(400).json({ ok: false, error: 'Brak emaila' });
 
-        // Pobierz adres z orders.json i zapisz flagę wysłania
+        // Pobierz adres i baselinker_id z orders.json
         const orders = loadOrders();
         const orderIdx = orders.findIndex(o => o.order_uuid === order_uuid);
         const order = orderIdx >= 0 ? orders[orderIdx] : null;
         const address = order?.customer_address || '';
+        const blOrderId = order?.baselinker_id || null; // BL ID do pobrania faktury
 
-        await sendShippingEmail(order_uuid, email, name, tracking, courier, address);
+        await sendShippingEmail(blOrderId, email, name, tracking, courier, address, order_uuid.slice(0,8));
 
         // Zapisz flagę że email wysyłki został wysłany
         if (orderIdx >= 0) {
