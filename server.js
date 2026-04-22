@@ -441,7 +441,13 @@ app.get('/zamowienia', (req, res) => {
             <td><small>${o.customer_address}</small></td>
             <td><small>${items}</small></td>
             <td><b>${total} zł</b></td>
-            <td>${payStatus}<br>${blId ? `<span class="bl-status" id="bls-${blId}"><span style="color:#9ca3af;font-size:11px">ładowanie...</span></span>` : ''}</td>
+            <td>${payStatus}<br>${blId
+                ? `<span class="bl-status" id="bls-${blId}"><span style="color:#9ca3af;font-size:11px">ładowanie...</span></span>`
+                : `<span style="font-size:11px;color:#9ca3af">Brak BL ID<br>
+                   <input type="number" placeholder="Nr BL" style="width:80px;padding:2px 6px;border:1px solid #e5e7eb;border-radius:5px;font-size:11px;margin-top:3px" id="bllink-${o.order_uuid}">
+                   <button onclick="linkBL('${o.order_uuid}')" style="padding:2px 8px;background:#6366f1;color:#fff;border:none;border-radius:5px;font-size:11px;cursor:pointer;margin-top:3px">Podepnij</button>
+                   </span>`
+            }</td>
             <td><small>${o.order_uuid.slice(0,8)}</small></td>
         </tr>`;
     }).join('');
@@ -627,6 +633,20 @@ app.get('/zamowienia', (req, res) => {
         btn.disabled=false; btn.textContent='Wyślij email';
     }
     document.getElementById('modalBg').addEventListener('click', e => { if(e.target===e.currentTarget) closeModal(); });
+
+    async function linkBL(uuid) {
+        const input = document.getElementById('bllink-' + uuid);
+        const blId = input ? input.value.trim() : '';
+        if (!blId) { alert('Wpisz numer zamówienia z BaseLinker'); return; }
+        const r = await fetch('/api/link-bl-order', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ order_uuid: uuid, baselinker_id: parseInt(blId), pass: PASS })
+        });
+        const d = await r.json();
+        if (d.ok) { location.reload(); }
+        else { alert('Błąd: ' + d.error); }
+    }
     </script>
     </body></html>`);
 });
@@ -1155,6 +1175,23 @@ app.get('/api/test-email', async (req, res) => {
     } catch(e) {
         res.json({ ok: false, error: e.message });
     }
+});
+
+// ════════════════════════════════════════════════════════════
+//  Ręczne podpięcie BaseLinker ID do zamówienia
+//  POST /api/link-bl-order { order_uuid, baselinker_id, pass }
+// ════════════════════════════════════════════════════════════
+app.post('/api/link-bl-order', (req, res) => {
+    const { order_uuid, baselinker_id, pass } = req.body;
+    if (pass !== ADMIN_PASS) return res.status(403).json({ ok: false, error: 'Brak dostępu' });
+    if (!order_uuid || !baselinker_id) return res.status(400).json({ ok: false, error: 'Brak danych' });
+    const orders = loadOrders();
+    const idx = orders.findIndex(o => o.order_uuid === order_uuid);
+    if (idx < 0) return res.status(404).json({ ok: false, error: 'Nie znaleziono zamówienia' });
+    orders[idx].baselinker_id = baselinker_id;
+    fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
+    console.log(`🔗 Podpięto BL #${baselinker_id} do zamówienia ${order_uuid}`);
+    return res.json({ ok: true });
 });
 
 // ════════════════════════════════════════════════════════════
