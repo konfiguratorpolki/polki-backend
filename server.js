@@ -371,6 +371,10 @@ app.post('/api/paynow-notify', async (req, res) => {
                 if (blData.status === 'SUCCESS') {
                     console.log(`✅ BaseLinker zamówienie #${blData.order_id} dla PayNow ${externalId}`);
                     order.baselinker_id = blData.order_id;
+                    // Zapisz baselinker_id z powrotem do orders.json
+                    const allOrders = loadOrders();
+                    const idx = allOrders.findIndex(o => o.order_uuid === order.order_uuid);
+                    if (idx >= 0) { allOrders[idx].baselinker_id = blData.order_id; fs.writeFileSync(ORDERS_FILE, JSON.stringify(allOrders, null, 2)); }
                     // Zapisz snapshoty → /api/order-snapshots (dla zamowienie.html)
                     const snapsToSave = (orderData.cart||[]).map(i=>({code:i.code,snapshot:i.snapshot||''})).filter(i=>i.snapshot);
                     if (snapsToSave.length > 0) saveSnapshots(String(blData.order_id), snapsToSave);
@@ -732,6 +736,10 @@ app.post('/api/test-order', async (req, res) => {
             if (blData.status === 'SUCCESS') {
                 console.log(`✅ BaseLinker TEST zamówienie #${blData.order_id}`);
                 order.baselinker_id = blData.order_id;
+                // Zapisz baselinker_id z powrotem do orders.json
+                const allOrders = loadOrders();
+                const idx = allOrders.findIndex(o => o.order_uuid === order.order_uuid);
+                if (idx >= 0) { allOrders[idx].baselinker_id = blData.order_id; fs.writeFileSync(ORDERS_FILE, JSON.stringify(allOrders, null, 2)); }
                 // Zapisz snapshoty → /api/order-snapshots (dla zamowienie.html)
                 const snapsToSave = (orderData.cart||[]).map(i=>({code:i.code,snapshot:i.snapshot||''})).filter(i=>i.snapshot);
                 if (snapsToSave.length > 0) saveSnapshots(String(blData.order_id), snapsToSave);
