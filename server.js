@@ -1369,6 +1369,42 @@ async function handleBlWebhook(req, res) {
     }
 }
 
+// Pobierz PDF faktury z BaseLinker dla danego zamówienia (zwraca base64 lub null)
+async function fetchInvoicePdf(blOrderId) {
+    if (!BASELINKER_TOKEN || !blOrderId) return null;
+    try {
+        // 1. Znajdź fakturę dla zamówienia
+        const listRes = await fetch(BL_API, {
+            method: 'POST',
+            headers: { 'X-BLToken': BASELINKER_TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `method=getInvoices&parameters=${encodeURIComponent(JSON.stringify({ order_id: parseInt(blOrderId) }))}`
+        });
+        const listData = await listRes.json();
+        if (listData.status !== 'SUCCESS' || !listData.invoices?.length) {
+            console.log(`ℹ️ Brak faktury w BL dla zamówienia #${blOrderId}`);
+            return null;
+        }
+        const invoiceId = listData.invoices[0].invoice_id;
+
+        // 2. Pobierz plik PDF
+        const pdfRes = await fetch(BL_API, {
+            method: 'POST',
+            headers: { 'X-BLToken': BASELINKER_TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `method=getInvoiceFile&parameters=${encodeURIComponent(JSON.stringify({ invoice_id: invoiceId }))}`
+        });
+        const pdfData = await pdfRes.json();
+        if (pdfData.status !== 'SUCCESS') return null;
+
+        let base64 = pdfData.file || pdfData.invoice || '';
+        if (base64.includes(',')) base64 = base64.split(',')[1];
+        console.log(`📄 Faktura BL pobrana dla zamówienia #${blOrderId} (invoice #${invoiceId})`);
+        return { base64, filename: `faktura-${blOrderId}.pdf` };
+    } catch(e) {
+        console.warn(`⚠️ fetchInvoicePdf #${blOrderId}:`, e.message);
+        return null;
+    }
+}
+
 async function sendShippingEmail(orderId, email, name, tracking, courier, address) {
     if (!RESEND_KEY) return;
     try {
@@ -1390,6 +1426,14 @@ async function sendShippingEmail(orderId, email, name, tracking, courier, addres
              </td>
            </tr></table>` : '';
 
+        // Spróbuj pobrać fakturę PDF z BaseLinker
+        const invoice = await fetchInvoicePdf(orderId);
+        const attachments = invoice
+            ? [{ filename: invoice.filename, content: invoice.base64 }]
+            : [];
+        if (invoice) console.log(`📎 Faktura dołączona do emaila: ${invoice.filename}`);
+        else console.log(`ℹ️ Brak faktury — email wysłany bez załącznika`);
+
         // Wyślij email przez Resend
         const r = await fetch('https://api.resend.com/emails', {
             method: 'POST',
@@ -1399,6 +1443,7 @@ async function sendShippingEmail(orderId, email, name, tracking, courier, addres
                 reply_to: 'regaliki.pl@gmail.com',
                 to: [email],
                 subject: `Twoja paczka jest w drodze! 🚚 #${orderId}`,
+                ...(attachments.length > 0 ? { attachments } : {}),
                 html: `<!DOCTYPE html>
 <html lang="pl">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
