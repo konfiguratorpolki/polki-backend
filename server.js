@@ -981,23 +981,20 @@ function trackingUrl(courier, number) {
     return null;
 }
 
-app.post('/api/bl-webhook', async (req, res) => {
+// BaseLinker może wysyłać GET lub POST — obsługujemy oba
+async function handleBlWebhook(req, res) {
     try {
-        const body = req.body;
-        console.log('[BL Webhook]', JSON.stringify(body));
+        // BaseLinker może wysyłać dane jako JSON body, form-urlencoded lub query params
+        const body = (req.body && Object.keys(req.body).length > 0) ? req.body : req.query;
+        console.log('[BL Webhook] method:', req.method, '| body:', JSON.stringify(body), '| query:', JSON.stringify(req.query));
 
         // BaseLinker wysyła event jako string lub obiekt
-        const event    = body.event    || body.event_type || '';
+        const event    = body.event    || body.event_type || body.type || 'order_status_change';
         const orderId  = body.order_id  || body.orderId   || '';
-        const statusId = String(body.status_id || body.statusId || '');
-
-        // Akceptujemy tylko zmianę statusu
-        if (!event.includes('status') && !event.includes('order')) {
-            return res.status(200).json({ ok: true, info: 'event ignorowany' });
-        }
+        const statusId = String(body.status_id || body.statusId || body.new_status_id || '');
 
         // Sprawdź czy to status "Wysłano"
-        if (SHIPPED_STATUS_ID && statusId !== String(SHIPPED_STATUS_ID)) {
+        if (SHIPPED_STATUS_ID && statusId && statusId !== String(SHIPPED_STATUS_ID)) {
             console.log(`[BL Webhook] Status ${statusId} ≠ SHIPPED_STATUS_ID ${SHIPPED_STATUS_ID} — pomijam`);
             return res.status(200).json({ ok: true, info: 'nie status wysyłki' });
         }
@@ -1125,7 +1122,9 @@ app.post('/api/bl-webhook', async (req, res) => {
         console.error('❌ bl-webhook:', err.message);
         return res.status(200).json({ ok: false, error: err.message }); // zawsze 200 żeby BL nie powtarzał
     }
-});
+}
+app.post('/api/bl-webhook', handleBlWebhook);
+app.get('/api/bl-webhook',  handleBlWebhook);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
