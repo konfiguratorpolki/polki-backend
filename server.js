@@ -407,20 +407,24 @@ app.get('/zamowienia', (req, res) => {
 
     const adminPass = req.query.pass;
     const orders = loadOrders().reverse();
+    const shippedEmails = loadShippedEmails();
+
+    // Zbierz baselinker_id dla zamówień które mają je ustawione
+    const blIds = orders.map(o => o.baselinker_id).filter(Boolean);
+    const blIdsSafe = blIds.map(id => String(id).replace(/[^0-9]/g,'')).filter(Boolean);
+
     const rows = orders.map(o => {
         const cart = JSON.parse(o.cart_json || '[]');
         const total = ((o.total_amount||0)/100).toFixed(2);
-        const statusColor = o.status === 'paid' ? '#16a34a' : o.status === 'paid_test' ? '#ca8a04' : '#6b7280';
-        const statusLabel = o.status === 'paid' ? '✅ Opłacone' : o.status === 'paid_test' ? '🧪 Test' : '⏳ Oczekuje';
+        const payStatus = o.status === 'paid' ? '✅ Opłacone' : o.status === 'paid_test' ? '🧪 Test' : '⏳ Oczekuje';
         const items = cart.map(i => `${i.name} x${i.quantity}`).join(', ');
         const date = new Date(o.created_at).toLocaleString('pl-PL');
-        const shipped = loadShippedEmails();
-        const alreadySent = o.shipping_email_sent || shipped.has(String(o.baselinker_id));
+        const alreadySent = o.shipping_email_sent || shippedEmails.has(String(o.baselinker_id));
+        const blId = o.baselinker_id || '';
         const shippingBtn = (o.status === 'paid' || o.status === 'paid_test')
             ? alreadySent
-                ? `<span style="margin-top:6px;display:inline-block;padding:5px 10px;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;border-radius:6px;font-size:12px;font-weight:600">✅ Wysłano info o wysyłce</span>`
-                : `<button onclick="openShipping('${o.order_uuid}','${o.customer_email}','${o.customer_name}')"
-                    style="margin-top:6px;padding:5px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px">
+                ? `<span class="sent-badge">✅ Wysłano info o wysyłce</span>`
+                : `<button class="ship-btn" onclick="openShipping('${o.order_uuid}','${o.customer_email}','${o.customer_name}','${blId}')" data-uuid="${o.order_uuid}">
                     🚚 Wyślij info o wysyłce
                    </button>`
             : '';
@@ -430,7 +434,7 @@ app.get('/zamowienia', (req, res) => {
             <td><small>${o.customer_address}</small></td>
             <td><small>${items}</small></td>
             <td><b>${total} zł</b></td>
-            <td style="color:${statusColor}">${statusLabel}</td>
+            <td>${payStatus}<br>${blId ? `<span class="bl-status" id="bls-${blId}"><span style="color:#9ca3af;font-size:11px">ładowanie...</span></span>` : ''}</td>
             <td><small>${o.order_uuid.slice(0,8)}</small></td>
         </tr>`;
     }).join('');
@@ -454,21 +458,32 @@ app.get('/zamowienia', (req, res) => {
         td{padding:12px 16px;border-bottom:1px solid #f3f4f6;vertical-align:top;font-size:14px}
         tr:hover td{background:#f9fafb}
         .empty{text-align:center;padding:48px;color:#6b7280}
+        .bl-badge{display:inline-block;margin-top:4px;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600}
+        .bl-new{background:#dbeafe;color:#1d4ed8}
+        .bl-prod{background:#fef9c3;color:#b45309}
+        .bl-sent{background:#dcfce7;color:#16a34a}
+        .bl-cancel{background:#fee2e2;color:#dc2626}
+        .bl-other{background:#f3f4f6;color:#6b7280}
+        .ship-btn{margin-top:6px;padding:5px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px}
+        .ship-btn:hover{background:#1d4ed8}
+        .sent-badge{margin-top:6px;display:inline-block;padding:5px 10px;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;border-radius:6px;font-size:12px;font-weight:600}
         .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;align-items:center;justify-content:center}
         .modal-bg.open{display:flex}
         .modal{background:#fff;border-radius:14px;padding:32px;width:420px;box-shadow:0 8px 32px rgba(0,0,0,.2)}
         .modal h3{margin:0 0 20px;font-size:18px}
         .modal label{display:block;font-size:13px;color:#6b7280;margin-bottom:4px;font-weight:500}
         .modal input,.modal select{width:100%;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;font-size:14px;margin-bottom:14px;box-sizing:border-box}
+        .auto-filled{background:#f0fdf4;border-color:#86efac !important}
         .modal-btns{display:flex;gap:10px;margin-top:6px}
         .btn-send{flex:1;padding:11px;background:#16a34a;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600}
         .btn-cancel{padding:11px 18px;background:#f3f4f6;color:#374151;border:none;border-radius:8px;cursor:pointer;font-size:14px}
         .msg{margin-top:12px;padding:10px;border-radius:8px;font-size:13px;text-align:center;display:none}
         .msg.ok{background:#f0fdf4;color:#16a34a;display:block}
         .msg.err{background:#fef2f2;color:#dc2626;display:block}
+        .auto-info{font-size:12px;color:#16a34a;margin-bottom:14px;padding:8px 12px;background:#f0fdf4;border-radius:8px;display:none}
     </style>
     </head><body>
-    <div class="header"><h1>🛒 Panel zamówień — Konfigurator Półek</h1>
+    <div class="header"><h1>🛒 Panel zamówień — regaliki.pl</h1>
     <span>${orders.length} zamówień</span></div>
     <div class="stats">
         <div class="stat"><div class="val">${orders.length}</div><div class="lbl">Wszystkie zamówienia</div></div>
@@ -489,7 +504,8 @@ app.get('/zamowienia', (req, res) => {
     <div class="modal-bg" id="modalBg">
       <div class="modal">
         <h3>🚚 Wyślij powiadomienie o wysyłce</h3>
-        <div id="modalInfo" style="font-size:13px;color:#6b7280;margin-bottom:16px"></div>
+        <div id="modalInfo" style="font-size:13px;color:#6b7280;margin-bottom:12px"></div>
+        <div class="auto-info" id="autoInfo">✨ Dane pobrane automatycznie z BaseLinker</div>
         <label>Kurier</label>
         <select id="courierSel">
           <option value="InPost">InPost</option>
@@ -511,37 +527,93 @@ app.get('/zamowienia', (req, res) => {
     </div>
 
     <script>
-    let _uuid='',_email='',_name='';
-    function openShipping(uuid,email,name){
+    const PASS = '${adminPass}';
+    let _uuid='', _email='', _name='';
+
+    // Pobierz statusy BL dla wszystkich zamówień
+    const blIds = ${JSON.stringify(blIdsSafe)};
+    if (blIds.length > 0) {
+        fetch('/api/bl-orders-info?ids=' + blIds.join(',') + '&pass=' + PASS)
+            .then(r => r.json())
+            .then(data => {
+                if (!data.orders) return;
+                data.orders.forEach(o => {
+                    const el = document.getElementById('bls-' + o.order_id);
+                    if (!el) return;
+                    const cls = o.status_name?.toLowerCase().includes('wysl') ? 'bl-sent'
+                              : o.status_name?.toLowerCase().includes('nowe') ? 'bl-new'
+                              : o.status_name?.toLowerCase().includes('anulo') ? 'bl-cancel'
+                              : o.status_name?.toLowerCase().includes('wysył') || o.status_name?.toLowerCase().includes('realiz') ? 'bl-prod'
+                              : 'bl-other';
+                    el.innerHTML = '<span class="bl-badge ' + cls + '">BL: ' + (o.status_name || '?') + '</span>';
+                    if (o.tracking) {
+                        el.innerHTML += '<br><small style="color:#6b7280;font-size:11px">📦 ' + o.tracking + '</small>';
+                    }
+                    // Zapisz dane do przycisku wysyłki
+                    const btn = document.querySelector('.ship-btn[data-uuid]');
+                    if (btn && o.tracking) {
+                        el.dataset.tracking = o.tracking;
+                        el.dataset.courier  = o.courier || '';
+                    }
+                    // Zapisz dane globalnie po order_id
+                    window._blData = window._blData || {};
+                    window._blData[o.order_id] = o;
+                });
+            }).catch(() => {});
+    }
+
+    function openShipping(uuid, email, name, blId) {
         _uuid=uuid; _email=email; _name=name;
-        document.getElementById('modalInfo').textContent='Do: '+name+' ('+email+')';
-        document.getElementById('trackingNum').value='';
-        document.getElementById('modalMsg').className='msg';
+        document.getElementById('modalInfo').textContent = 'Do: ' + name + ' (' + email + ')';
+        document.getElementById('trackingNum').value = '';
+        document.getElementById('trackingNum').className = '';
+        document.getElementById('courierSel').className = '';
+        document.getElementById('modalMsg').className = 'msg';
+        document.getElementById('autoInfo').style.display = 'none';
+
+        // Spróbuj wypełnić danymi z BL
+        const blInfo = window._blData && blId ? window._blData[blId] : null;
+        if (blInfo && blInfo.tracking) {
+            document.getElementById('trackingNum').value = blInfo.tracking;
+            document.getElementById('trackingNum').className = 'auto-filled';
+            if (blInfo.courier) {
+                const sel = document.getElementById('courierSel');
+                const courier = blInfo.courier.toLowerCase();
+                for (let opt of sel.options) {
+                    if (courier.includes(opt.value.toLowerCase()) || opt.value.toLowerCase().includes(courier)) {
+                        sel.value = opt.value; break;
+                    }
+                }
+                sel.className = 'auto-filled';
+            }
+            document.getElementById('autoInfo').style.display = 'block';
+        }
+
         document.getElementById('modalBg').classList.add('open');
     }
-    function closeModal(){ document.getElementById('modalBg').classList.remove('open'); }
-    async function sendShipping(){
-        const courier = document.getElementById('courierSel').value;
+
+    function closeModal() { document.getElementById('modalBg').classList.remove('open'); }
+
+    async function sendShipping() {
+        const courier  = document.getElementById('courierSel').value;
         const tracking = document.getElementById('trackingNum').value.trim();
         const btn = document.querySelector('.btn-send');
         btn.disabled=true; btn.textContent='Wysyłanie...';
         try {
             const r = await fetch('/api/send-shipping', {
-                method:'POST',
-                headers:{'Content-Type':'application/json'},
-                body: JSON.stringify({
-                    order_uuid: _uuid,
-                    email: _email,
-                    name: _name,
-                    courier, tracking,
-                    pass: '${adminPass}'
-                })
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ order_uuid:_uuid, email:_email, name:_name, courier, tracking, pass:PASS })
             });
             const d = await r.json();
             const msg = document.getElementById('modalMsg');
-            if(d.ok){ msg.className='msg ok'; msg.textContent='✅ Email wysłany!'; setTimeout(closeModal,1500); }
-            else { msg.className='msg err'; msg.textContent='❌ '+d.error; }
-        } catch(e){
+            if (d.ok) {
+                msg.className='msg ok'; msg.textContent='✅ Email wysłany!';
+                setTimeout(() => { closeModal(); location.reload(); }, 1500);
+            } else {
+                msg.className='msg err'; msg.textContent='❌ ' + d.error;
+            }
+        } catch(e) {
             document.getElementById('modalMsg').className='msg err';
             document.getElementById('modalMsg').textContent='❌ Błąd połączenia';
         }
@@ -1071,6 +1143,67 @@ app.get('/api/test-email', async (req, res) => {
         else res.json({ ok: false, error: d.message || JSON.stringify(d) });
     } catch(e) {
         res.json({ ok: false, error: e.message });
+    }
+});
+
+// ════════════════════════════════════════════════════════════
+//  BaseLinker — Informacje o zamówieniach (status + tracking)
+//  GET /api/bl-orders-info?ids=123,456&pass=xxx
+//  Zwraca: [{ order_id, status_name, tracking, courier }]
+// ════════════════════════════════════════════════════════════
+app.get('/api/bl-orders-info', async (req, res) => {
+    const { ids, pass } = req.query;
+    if (pass !== ADMIN_PASS) return res.status(403).json({ error: 'Brak dostępu' });
+    if (!ids) return res.json({ orders: [] });
+    if (!BASELINKER_TOKEN) return res.json({ orders: [], error: 'Brak BASELINKER_TOKEN' });
+
+    const idList = ids.split(',').map(s => s.trim()).filter(Boolean).slice(0, 50);
+    if (!idList.length) return res.json({ orders: [] });
+
+    try {
+        // 1. Pobierz listę statusów (do mapowania id→nazwa)
+        const statusMap = {};
+        try {
+            const sr = await fetch(BL_API, {
+                method: 'POST',
+                headers: { 'X-BLToken': BASELINKER_TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `method=getOrderStatusList&parameters={}`
+            });
+            const sd = await sr.json();
+            if (sd.status === 'SUCCESS' && sd.statuses) {
+                sd.statuses.forEach(s => { statusMap[s.id] = s.name; });
+            }
+        } catch(e) { console.warn('bl-orders-info statusy:', e.message); }
+
+        // 2. Pobierz szczegóły każdego zamówienia po order_id
+        const results = [];
+        for (const orderId of idList) {
+            try {
+                const r = await fetch(BL_API, {
+                    method: 'POST',
+                    headers: { 'X-BLToken': BASELINKER_TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: `method=getOrders&parameters=${encodeURIComponent(JSON.stringify({ order_id: parseInt(orderId) }))}`
+                });
+                const d = await r.json();
+                const blOrder = d.orders?.[0];
+                if (!blOrder) { results.push({ order_id: orderId, status_name: null, tracking: null, courier: null }); continue; }
+
+                const statusName = statusMap[blOrder.order_status_id] || null;
+                const pkg = blOrder.packages?.[0];
+                const tracking = pkg?.tracking_number || blOrder.package_number || null;
+                const courier  = pkg?.courier_code    || blOrder.delivery_method || null;
+
+                results.push({ order_id: orderId, status_name: statusName, tracking, courier });
+            } catch(e) {
+                console.warn(`bl-orders-info #${orderId}:`, e.message);
+                results.push({ order_id: orderId, status_name: null, tracking: null, courier: null });
+            }
+        }
+
+        return res.json({ orders: results });
+    } catch(err) {
+        console.error('❌ bl-orders-info:', err.message);
+        return res.status(500).json({ error: err.message, orders: [] });
     }
 });
 
