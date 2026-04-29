@@ -1532,6 +1532,63 @@ app.post('/api/send-shipping', async (req, res) => {
     }
 });
 
+// ════════════════════════════════════════════════════════════
+//  Formularz kontaktowy
+//  POST /api/contact  { name, email, phone, message }
+// ════════════════════════════════════════════════════════════
+app.use('/api/contact', rateLimit({ windowMs: 15*60*1000, max: 10, message: { ok: false, error: 'Zbyt wiele wiadomości. Spróbuj za chwilę.' } }));
+
+app.post('/api/contact', async (req, res) => {
+    try {
+        const { name, email, phone, message } = req.body || {};
+        if (!name || !email || !message) {
+            return res.status(400).json({ ok: false, error: 'Wypełnij wszystkie wymagane pola.' });
+        }
+        if (message.length > 2000) {
+            return res.status(400).json({ ok: false, error: 'Wiadomość jest za długa (max 2000 znaków).' });
+        }
+        if (!RESEND_KEY) {
+            console.warn('⚠️ /api/contact — brak RESEND_API_KEY');
+            return res.status(500).json({ ok: false, error: 'Błąd konfiguracji serwera.' });
+        }
+
+        const html = `
+        <div style="font-family:sans-serif;max-width:600px;color:#111827">
+          <h2 style="color:#16a34a;margin-bottom:4px">📬 Nowa wiadomość z formularza kontaktowego</h2>
+          <p style="color:#6b7280;font-size:13px;margin-top:0">regaliki.pl — formularz kontaktowy</p>
+          <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:20px">
+            <tr><td style="padding:10px 14px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:120px">Imię i nazwisko</td><td style="padding:10px 14px;border:1px solid #e5e7eb">${name}</td></tr>
+            <tr><td style="padding:10px 14px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600">E-mail</td><td style="padding:10px 14px;border:1px solid #e5e7eb"><a href="mailto:${email}">${email}</a></td></tr>
+            <tr><td style="padding:10px 14px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600">Telefon</td><td style="padding:10px 14px;border:1px solid #e5e7eb">${phone || '—'}</td></tr>
+          </table>
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:16px 18px;font-size:14px;line-height:1.6;white-space:pre-wrap">${message.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+          <p style="font-size:12px;color:#9ca3af;margin-top:20px">Odpowiedz bezpośrednio na ten email lub na adres: <a href="mailto:${email}">${email}</a></p>
+        </div>`;
+
+        const r = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                from: 'regaliki.pl <zamowienia@regaliki.pl>',
+                reply_to: email,
+                to: [MAIL_TO],
+                subject: `📬 Wiadomość od ${name} — formularz kontaktowy`,
+                html
+            })
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            console.error('❌ /api/contact email błąd:', JSON.stringify(d));
+            return res.status(500).json({ ok: false, error: 'Nie udało się wysłać wiadomości.' });
+        }
+        console.log(`📬 Formularz kontaktowy od ${name} <${email}> — wysłano (${d.id})`);
+        return res.json({ ok: true });
+    } catch(e) {
+        console.error('❌ /api/contact wyjątek:', e.message);
+        return res.status(500).json({ ok: false, error: 'Błąd serwera.' });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`✅ Backend port ${PORT} | Tryb: ${TEST_MODE ? 'TESTOWY' : 'PRODUKCJA'}`);
